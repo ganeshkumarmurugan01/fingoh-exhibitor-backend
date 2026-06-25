@@ -9,26 +9,19 @@ security = HTTPBearer()
 def verify_token(token: str) -> dict:
     settings = get_settings()
     try:
-        # Decode header to get kid (key id)
         header = pyjwt.get_unverified_header(token)
         alg = header.get("alg", "HS256")
 
         if alg == "ES256":
-            # Fetch Supabase JWKS to get the public key
             import httpx
             jwks_url = f"{settings.supabase_url}/auth/v1/.well-known/jwks.json"
             response = httpx.get(jwks_url)
             jwks = response.json()
-
-            # Find the matching key by kid
             kid = header.get("kid")
             key_data = next((k for k in jwks["keys"] if k["kid"] == kid), None)
             if not key_data:
                 raise HTTPException(status_code=401, detail="Signing key not found")
-
-            # Build public key from JWKS
             public_key = pyjwt.algorithms.ECAlgorithm.from_jwk(key_data)
-
             payload = pyjwt.decode(
                 token,
                 public_key,
@@ -36,7 +29,6 @@ def verify_token(token: str) -> dict:
                 options={"verify_aud": False},
             )
         else:
-            # HS256 fallback
             payload = pyjwt.decode(
                 token,
                 settings.supabase_jwt_secret,
@@ -75,12 +67,11 @@ def get_user_org(user_id: str, db) -> str:
         db.table("profiles")
         .select("org_id")
         .eq("id", user_id)
-        .maybe_single()
         .execute()
     )
-    if not result.data or not result.data.get("org_id"):
+    if not result.data or not result.data[0].get("org_id"):
         raise HTTPException(
             status_code=400,
             detail="Organisation not found. Please complete onboarding.",
         )
-    return result.data["org_id"]
+    return result.data[0]["org_id"]
