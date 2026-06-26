@@ -50,12 +50,12 @@ def verify_token(token: str) -> dict:
 
 
 async def get_current_user(request: Request) -> dict:
-    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    auth = (request.headers.get("x-fingoh-auth") 
+            or request.headers.get("authorization") 
+            or request.headers.get("Authorization") 
+            or "")
     if not auth or not auth.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401,
-            detail=f"Not authenticated. Headers received: {list(request.headers.keys())}"
-        )
+        raise HTTPException(status_code=401, detail="Not authenticated")
     token = auth[7:]
     return verify_token(token)
 
