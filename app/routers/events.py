@@ -83,7 +83,7 @@ def create_event(
     return _build_event_detail(event, db)
 
 
-@router.get("{event_id}", response_model=EventDetailResponse)
+@router.get("/{event_id}", response_model=EventDetailResponse)
 def get_event(
     event_id: str,
     current_user: dict = Depends(get_current_user),
@@ -94,7 +94,7 @@ def get_event(
     return _build_event_detail(event, db)
 
 
-@router.patch("{event_id}", response_model=EventDetailResponse)
+@router.patch("/{event_id}", response_model=EventDetailResponse)
 def update_event(
     event_id: str,
     payload: EventUpdate,
@@ -121,7 +121,7 @@ def update_event(
     return _build_event_detail(result.data[0], db)
 
 
-@router.delete("{event_id}", status_code=204)
+@router.delete("/{event_id}", status_code=204)
 def delete_event(
     event_id: str,
     current_user: dict = Depends(get_current_user),
