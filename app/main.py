@@ -5,7 +5,7 @@ from app.routers import onboarding, events, staff
 
 settings = get_settings()
 
-app = FastAPI(title="Fingoh Exhibitor API", version="1.0.0")
+app = FastAPI(redirect_slashes=False, title="Fingoh Exhibitor API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
