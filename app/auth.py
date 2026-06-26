@@ -1,9 +1,6 @@
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Request, HTTPException, status
 import jwt as pyjwt
 from app.config import get_settings
-
-security = HTTPBearer()
 
 
 def verify_token(token: str) -> dict:
@@ -49,17 +46,18 @@ def verify_token(token: str) -> dict:
     except pyjwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired")
     except pyjwt.InvalidTokenError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+
+
+async def get_current_user(request: Request) -> dict:
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth or not auth.startswith("Bearer "):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {str(e)}",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=401,
+            detail=f"Not authenticated. Headers received: {list(request.headers.keys())}"
         )
-
-
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-) -> dict:
-    return verify_token(credentials.credentials)
+    token = auth[7:]
+    return verify_token(token)
 
 
 def get_user_org(user_id: str, db) -> str:
