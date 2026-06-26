@@ -11,7 +11,7 @@ from app.models.organisation import (
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
 
-@router.get("/me", response_model=ProfileResponse)
+@router.get("me", response_model=ProfileResponse)
 def get_my_profile(current_user: dict = Depends(get_current_user)):
     db = get_db()
     result = (
@@ -25,7 +25,7 @@ def get_my_profile(current_user: dict = Depends(get_current_user)):
     return result.data[0]
 
 
-@router.post("/organisation", response_model=OrganisationResponse, status_code=201)
+@router.post("organisation", response_model=OrganisationResponse, status_code=201)
 def create_organisation(
     payload: OrganisationCreate,
     current_user: dict = Depends(get_current_user),
@@ -76,7 +76,7 @@ def create_organisation(
     return org
 
 
-@router.patch("/me", response_model=ProfileResponse)
+@router.patch("me", response_model=ProfileResponse)
 def update_my_profile(
     payload: ProfileUpdate,
     current_user: dict = Depends(get_current_user),

@@ -13,7 +13,7 @@ from typing import List
 router = APIRouter(prefix="/staff", tags=["staff"])
 
 
-@router.get("/", response_model=List[StaffResponse])
+@router.get("", response_model=List[StaffResponse])
 def list_staff(current_user: dict = Depends(get_current_user)):
     """
     Returns the full org-level staff roster.
@@ -32,7 +32,7 @@ def list_staff(current_user: dict = Depends(get_current_user)):
     return result.data or []
 
 
-@router.post("/", response_model=StaffResponse, status_code=201)
+@router.post("", response_model=StaffResponse, status_code=201)
 def add_staff(
     payload: StaffCreate,
     current_user: dict = Depends(get_current_user),
@@ -70,7 +70,7 @@ def add_staff(
     return result.data[0]
 
 
-@router.patch("/{staff_id}", response_model=StaffResponse)
+@router.patch("{staff_id}", response_model=StaffResponse)
 def update_staff(
     staff_id: str,
     payload: StaffUpdate,
@@ -95,7 +95,7 @@ def update_staff(
     return result.data[0]
 
 
-@router.delete("/{staff_id}", status_code=204)
+@router.delete("{staff_id}", status_code=204)
 def remove_staff(
     staff_id: str,
     current_user: dict = Depends(get_current_user),
@@ -108,7 +108,7 @@ def remove_staff(
     db.table("staff").delete().eq("id", staff_id).eq("org_id", org_id).execute()
 
 
-@router.post("/verify-login", response_model=StaffLoginResponse)
+@router.post("verify-login", response_model=StaffLoginResponse)
 def verify_staff_login(payload: StaffLoginRequest):
     """
     Staff App login endpoint — no auth token required.
