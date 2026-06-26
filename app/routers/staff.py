@@ -110,18 +110,8 @@ def remove_staff(
 
 @router.post("/verify-login", response_model=StaffLoginResponse)
 def verify_staff_login(payload: StaffLoginRequest):
-    """
-    Staff App login endpoint — no auth token required.
-    Verifies the staff member's email exists in the roster for this event's org.
-    Returns staff details so the frontend can set the active staff session.
-
-    This is intentionally public (no JWT) because staff are not Supabase users —
-    they are registered by the org admin and log in by email only.
-    """
     db = get_db()
 
-    # Find staff by email globally (org is derived from event)
-    # First get the event's org
     event_result = (
         db.table("events")
         .select("org_id")
@@ -129,12 +119,11 @@ def verify_staff_login(payload: StaffLoginRequest):
         .maybe_single()
         .execute()
     )
-    if not event_result.data:
+    if not event_result or not event_result.data:
         raise HTTPException(status_code=404, detail="Event not found")
 
     org_id = event_result.data["org_id"]
 
-    # Find the staff member within that org
     staff_result = (
         db.table("staff")
         .select("*")
@@ -143,7 +132,7 @@ def verify_staff_login(payload: StaffLoginRequest):
         .maybe_single()
         .execute()
     )
-    if not staff_result.data:
+    if not staff_result or not staff_result.data:
         raise HTTPException(
             status_code=404,
             detail="Email not found in the staff roster for this event. Ask your manager to add you in My Team.",
