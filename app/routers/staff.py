@@ -53,7 +53,7 @@ def add_staff(
         .maybe_single()
         .execute()
     )
-    if existing.data:
+    if existing and existing.data:
         raise HTTPException(
             status_code=409,
             detail=f"Staff member with email '{payload.email}' already exists in this organisation.",
