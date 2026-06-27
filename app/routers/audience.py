@@ -33,10 +33,10 @@ async def upload_audience(
     records = [
         {
             "event_id":    event_id,
-            "name":        _get(r, "name"),
+            "name":        _get(r, "name") or f'{_get(r, "first_name") or ""} {_get(r, "last_name") or ""}'.strip() or None,
             "email":       _get(r, "email"),
             "company":     _get(r, "company"),
-            "designation": _get(r, "designation"),
+            "designation": _get(r, "designation") or _get(r, "job_title"),
             "phone":       _get(r, "phone"),
             "city":        _get(r, "city"),
             "country":     _get(r, "country"),
