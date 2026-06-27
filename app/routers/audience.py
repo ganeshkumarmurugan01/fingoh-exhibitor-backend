@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import csv, io, httpx, os
 from app.database import get_db
-from app.auth import verify_token
+from app.auth import verify_token, get_current_user
 
 router = APIRouter(prefix="/audience", tags=["audience"])
 bearer = HTTPBearer()
@@ -14,9 +14,8 @@ MODAL_SCORER_URL = os.getenv("MODAL_SCORER_URL")
 async def upload_audience(
     event_id: str,
     file: UploadFile = File(...),
-    creds: HTTPAuthorizationCredentials = Depends(bearer),
+    current_user: dict = Depends(get_current_user),
 ):
-    verify_token(creds.credentials)
     supabase = get_db()
 
     content = await file.read()
@@ -59,9 +58,8 @@ async def upload_audience(
 @router.get("/contacts/{event_id}")
 async def list_contacts(
     event_id: str,
-    creds: HTTPAuthorizationCredentials = Depends(bearer),
+    current_user: dict = Depends(get_current_user),
 ):
-    verify_token(creds.credentials)
     supabase = get_db()
     res = (
         supabase.table("audience_contacts")
