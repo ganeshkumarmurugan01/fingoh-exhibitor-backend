@@ -212,3 +212,16 @@ async def debug_enrich(payload: dict, current_user: dict = Depends(get_current_u
         "anthropic_key_set": bool(ANTHROPIC_API_KEY),
         "signals": signals,
     }
+
+
+@router.post("/debug-enrich")
+async def debug_enrich(payload: dict, current_user: dict = Depends(get_current_user)):
+    """Debug: run enrichment on a single visitor and return raw signals."""
+    event_ctx = payload.get("event_ctx", {})
+    visitor = payload.get("visitor", {})
+    async with httpx.AsyncClient() as client:
+        signals = await _enrich_visitor(visitor, event_ctx, client)
+    return {
+        "anthropic_key_set": bool(ANTHROPIC_API_KEY),
+        "signals": signals,
+    }
