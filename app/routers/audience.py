@@ -1,15 +1,121 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import csv, io, httpx, os
+import csv, io, httpx, os, json, asyncio
 from app.database import get_db
-from app.auth import verify_token, get_current_user
+from app.auth import get_current_user
 
 router = APIRouter(prefix="/audience", tags=["audience"])
-bearer = HTTPBearer()
 
-MODAL_SCORER_URL = os.getenv("MODAL_SCORER_URL")
+MODAL_SCORER_URL  = os.getenv("MODAL_SCORER_URL")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 
+# ── Fetch event + exhibitor context ──────────────────────────────────────────
+def _get_event_context(supabase, event_id: str) -> dict:
+    ev = supabase.table("events").select("*").eq("id", event_id).maybe_single().execute()
+    if not ev or not ev.data:
+        return {}
+    cats = supabase.table("event_categories").select("category").eq("event_id", event_id).execute()
+    context = ev.data.copy()
+    context["categories"] = [c["category"] for c in (cats.data or [])]
+    return context
+
+
+# ── Claude enrichment — extracts signals for one visitor ─────────────────────
+async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncClient) -> dict:
+    if not ANTHROPIC_API_KEY:
+        return {}
+
+    name        = visitor.get("name") or f'{visitor.get("first_name","")} {visitor.get("last_name","")}'.strip()
+    title       = visitor.get("job_title") or visitor.get("title") or visitor.get("designation") or ""
+    company     = visitor.get("company") or ""
+    country     = visitor.get("country") or ""
+    reason      = visitor.get("primary_reason") or visitor.get("reason") or ""
+    categories  = visitor.get("categories_interest") or ""
+
+    ex_company   = event_ctx.get("company") or ""
+    ex_product   = event_ctx.get("product") or ""
+    ex_cats      = ", ".join(event_ctx.get("categories") or [])
+    ex_icp_roles = ", ".join(event_ctx.get("roles") or [])
+    ex_intent    = event_ctx.get("intent_why") or ""
+    ex_buyers    = event_ctx.get("intent_buyers") or ""
+
+    prompt = f"""You are an AI analyst for a B2B trade fair intelligence platform.
+
+EXHIBITOR CONTEXT:
+- Company: {ex_company}
+- Product / solution: {ex_product}
+- Target categories: {ex_cats}
+- Target visitor roles: {ex_icp_roles}
+- Exhibitor intent: {ex_intent}
+- Ideal buyer profile: {ex_buyers}
+
+VISITOR TO ANALYSE:
+- Name: {name}
+- Title: {title}
+- Company: {company}
+- Country: {country}
+- Declared visit reason: {reason}
+- Categories of interest: {categories}
+
+Using your knowledge of this person's role, company, and industry context, estimate the following intent signals as decimal values between 0.0 and 1.0.
+
+Respond ONLY with a valid JSON object — no explanation, no markdown:
+{{
+  "seniority_score": 0.0,
+  "icp_fit_score": 0.0,
+  "company_size_match": 0.0,
+  "categories_specificity": 0.0,
+  "buying_cycle_stage": 0.0,
+  "trigger_event_score": 0.0,
+  "tech_stack_compatibility": 0.0,
+  "competitive_displacement": 0.0,
+  "profile_completeness": 0.0,
+  "enrichment_notes": "brief reason for scores"
+}}
+
+Rules:
+- icp_fit_score: how well this visitor matches the exhibitor's ideal buyer (1.0 = perfect match, 0.0 = no match)
+- seniority_score: buying authority (1.0 = CEO/CXO, 0.75 = Director/VP, 0.5 = Manager, 0.3 = Analyst)
+- buying_cycle_stage: evidence of active evaluation (1.0 = active RFP/procurement, 0.5 = researching, 0.1 = awareness)
+- trigger_event_score: recent company signals like funding, expansion, new hire (0-1)
+- Be honest — if you have no data, use 0.3 as neutral, not 0.0"""
+
+    try:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 400,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=25,
+        )
+        resp.raise_for_status()
+        text = resp.json()["content"][0]["text"]
+        # Strip markdown fences if present
+        text = text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        return json.loads(text)
+    except Exception as e:
+        print(f"[enrichment] failed for {name}: {e}")
+        return {}
+
+
+# ── Score batch via Modal XGBoost ─────────────────────────────────────────────
+async def _score_batch(rows: list[dict]) -> list[dict]:
+    if not MODAL_SCORER_URL:
+        return [{"ieiScore": 50.0, "regProb": 0.5} for _ in rows]
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(MODAL_SCORER_URL, json={"visitors": rows})
+        resp.raise_for_status()
+        return resp.json()["scores"]
+
+
+# ── Upload endpoint ───────────────────────────────────────────────────────────
 @router.post("/upload/{event_id}")
 async def upload_audience(
     event_id: str,
@@ -28,7 +134,24 @@ async def upload_audience(
     if not rows:
         raise HTTPException(400, "Empty CSV")
 
-    scored = await _score_batch(rows)
+    # Fetch exhibitor context for this event
+    event_ctx = _get_event_context(supabase, event_id)
+
+    # Enrich each visitor with Claude (parallel, max 5 concurrent)
+    enriched_rows = []
+    if ANTHROPIC_API_KEY:
+        async with httpx.AsyncClient() as client:
+            sem = asyncio.Semaphore(5)
+            async def enrich_one(row):
+                async with sem:
+                    signals = await _enrich_visitor(row, event_ctx, client)
+                    return {**row, **signals}
+            enriched_rows = await asyncio.gather(*[enrich_one(r) for r in rows])
+    else:
+        enriched_rows = rows
+
+    # Score with XGBoost via Modal
+    scored = await _score_batch(enriched_rows)
 
     records = [
         {
@@ -45,10 +168,10 @@ async def upload_audience(
             "reg_prob":    s["regProb"],
             "scored_at":   "now()",
         }
-        for r, s in zip(rows, scored)
+        for r, s in zip(enriched_rows, scored)
     ]
 
-    res = supabase.table("audience_contacts").upsert(
+    supabase.table("audience_contacts").upsert(
         records, on_conflict="event_id,email"
     ).execute()
 
@@ -71,18 +194,7 @@ async def list_contacts(
     return res.data
 
 
-async def _score_batch(rows: list[dict]) -> list[dict]:
-    if not MODAL_SCORER_URL:
-        # stub — returns mid-range scores so UI is exercised
-        return [{"ieiScore": 50.0, "regProb": 0.5} for _ in rows]
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(MODAL_SCORER_URL, json={"visitors": rows})
-        resp.raise_for_status()
-        return resp.json()["scores"]
-
-
 def _get(row: dict, key: str) -> str | None:
-    """Case-insensitive column lookup for messy CSV headers."""
     for k, v in row.items():
         if k.strip().lower() == key:
             return v or None
