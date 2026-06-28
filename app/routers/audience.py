@@ -526,3 +526,19 @@ async def analyse_conversation(payload: dict):
     text = msg.content[0].text
     match = re.search(r"{[\s\S]*}", text)
     return json.loads(match.group(0)) if match else {}
+
+
+# ── Check if signal already logged today ─────────────────────────────────────
+@router.get("/check-signal/{contact_id}")
+async def check_signal(contact_id: str):
+    """Check if a signal was already logged for this contact today."""
+    import datetime
+    supabase = get_db()
+    today = datetime.date.today().isoformat()
+    res = supabase.table("conversation_signals").select(
+        "id,staff_name,created_at"
+    ).eq("contact_id", contact_id).gte("created_at", today).order("created_at", desc=True).limit(1).execute()
+    signals = res.data or []
+    if signals:
+        return {"already_logged": True, "logged_by": signals[0].get("staff_name", "a staff member"), "logged_at": signals[0].get("created_at")}
+    return {"already_logged": False}
