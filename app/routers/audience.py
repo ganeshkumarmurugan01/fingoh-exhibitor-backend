@@ -547,12 +547,14 @@ async def log_signal(
     }
 
     # Update contact — keep pre-event iei_score, add onsite scores separately
-    supabase.table("audience_contacts").update({
-        "raw_data":         raw,
-        "onsite_iei_score": onsite_score,
-        "onsite_iei_tier":  onsite_tier,
-        "onsite_signals":   onsite_signals,
-    }).eq("id", contact["id"]).execute()
+    try:
+        supabase.table("audience_contacts").update({
+            "raw_data":         raw,
+            "onsite_iei_score": float(onsite_score),
+            "onsite_iei_tier":  onsite_tier,
+        }).eq("id", contact["id"]).execute()
+    except Exception as e:
+        raise HTTPException(500, f"DB update failed: {str(e)}")
 
     # Insert into conversation_signals for duplicate detection
     try:
