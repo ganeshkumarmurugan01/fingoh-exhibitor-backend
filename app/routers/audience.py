@@ -414,21 +414,29 @@ async def log_signal(
     raw = contact.get("raw_data") or {}
 
     # Merge new signals into raw_data
-    signal_fields = [
-        "conv_quality", "questions_type", "demo_attendance",
-        "collateral_requested", "return_visit", "notes",
-        "badge_scan", "dwell_time_min",
-    ]
-    for field in signal_fields:
-        if field in payload:
-            raw[field] = payload[field]
+    # Normalise field names from both Staff App and old format
+    if "conversation_quality" in payload: raw["conv_quality"] = payload["conversation_quality"]
+    if "conv_quality" in payload: raw["conv_quality"] = payload["conv_quality"]
+    if "question_types" in payload: raw["questions_type"] = payload["question_types"][0] if isinstance(payload["question_types"], list) and payload["question_types"] else payload.get("question_types","general")
+    if "questions_type" in payload: raw["questions_type"] = payload["questions_type"]
+    if "demo_requested" in payload: raw["demo_attendance"] = payload["demo_requested"]
+    if "demo_attendance" in payload: raw["demo_attendance"] = payload["demo_attendance"]
+    if "collateral" in payload: raw["collateral_requested"] = payload["collateral"]
+    if "collateral_requested" in payload: raw["collateral_requested"] = payload["collateral_requested"]
+    if "return_visit" in payload: raw["return_visit"] = payload["return_visit"]
+    if "notes" in payload: raw["notes"] = payload["notes"]
+    if "badge_scan" in payload: raw["badge_scan"] = payload["badge_scan"]
+    if "urgency" in payload: raw["urgency"] = payload["urgency"]
+    if "buying_group" in payload: raw["buying_group"] = payload["buying_group"]
+    if "meeting_booked" in payload: raw["meeting_booked"] = payload["meeting_booked"]
 
     # Map signals to XGBoost feature names
-    conv_quality    = float(payload.get("conv_quality", raw.get("conv_quality", 0)) or 0)
-    questions_type  = payload.get("questions_type", raw.get("questions_type", "general"))
-    demo_attendance = bool(payload.get("demo_attendance", raw.get("demo_attendance", False)))
+    conv_quality    = float(payload.get("conversation_quality") or payload.get("conv_quality") or raw.get("conv_quality", 0) or 0)
+    questions_type  = payload.get("question_types", payload.get("questions_type", raw.get("questions_type", "general")))
+    if isinstance(questions_type, list): questions_type = questions_type[0] if questions_type else "general"
+    demo_attendance = bool(payload.get("demo_requested", payload.get("demo_attendance", raw.get("demo_attendance", False))))
     return_visit    = bool(payload.get("return_visit", raw.get("return_visit", False)))
-    collateral      = payload.get("collateral_requested", raw.get("collateral_requested", "none"))
+    collateral      = payload.get("collateral", payload.get("collateral_requested", raw.get("collateral_requested", "none")))
 
     # Build enriched visitor for rescoring
     enriched = {
