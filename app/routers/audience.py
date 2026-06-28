@@ -438,18 +438,62 @@ async def log_signal(
     return_visit    = bool(payload.get("return_visit", raw.get("return_visit", False)))
     collateral      = payload.get("collateral", payload.get("collateral_requested", raw.get("collateral_requested", "none")))
 
-    # Build enriched visitor for rescoring
+    # Build enriched visitor for rescoring using full 41-signal framework
+    # Start from pre-event enriched raw_data, then overlay on-site signals
+    pre_event_raw = contact.get("raw_data") or {}
+
+    # Map conversation quality (1-5) to 0-1
+    conv_quality_score = conv_quality / 5.0
+
+    # Map question types to score
+    qt = questions_type if isinstance(questions_type, str) else (questions_type[0] if questions_type else "general")
+    questions_type_score = (
+        1.0 if qt in ["pricing", "roi", "implementation"] else
+        0.7 if qt in ["technical", "comparison"] else
+        0.5 if qt in ["case_study", "timeline"] else
+        0.3
+    )
+
+    # Map urgency to buying_cycle_stage
+    urgency_val = payload.get("urgency", "")
+    buying_cycle = 1.0 if urgency_val == "high" else 0.6 if urgency_val == "medium" else 0.2
+
+    # Map collateral
+    coll_val = payload.get("collateral", payload.get("collateral_requested", ""))
+    collateral_specificity = (
+        1.0 if coll_val in ["Pricing sheet", "Technical spec"] else
+        0.6 if coll_val in ["Case study", "Brochure"] else
+        0.0
+    )
+
+    # meeting booked → proposal_demo_request
+    meeting_booked = bool(payload.get("meeting_booked", False))
+    buying_group   = bool(payload.get("buying_group", False))
+
     enriched = {
-        **raw,
-        "conv_quality_score":   conv_quality / 5.0,
-        "questions_type_score": 1.0 if questions_type in ["pricing","implementation"] else 0.7 if questions_type == "technical" else 0.5 if questions_type == "competitive" else 0.2,
-        "demo_attendance":      1.0 if demo_attendance else 0.0,
-        "return_visits":        1.0 if return_visit else 0.0,
-        "collateral_specificity": 1.0 if collateral == "specific" else 0.3 if collateral == "generic" else 0.0,
-        "badge_scan_count":     1.0,
-        "icp_fit_score":        contact.get("raw_data", {}).get("icp_fit_score", 0.5),
-        "seniority_score":      contact.get("raw_data", {}).get("seniority_score", 0.3),
-        "buying_cycle_stage":   contact.get("raw_data", {}).get("buying_cycle_stage", 0.0),
+        # Preserve all pre-event signals
+        **pre_event_raw,
+        # Overlay on-site signals
+        "job_title":              contact.get("designation", pre_event_raw.get("job_title", "")),
+        "conv_quality_score":     conv_quality_score,
+        "questions_type_score":   questions_type_score,
+        "demo_attendance":        1.0 if demo_attendance else 0.0,
+        "return_visits":          1.0 if return_visit else 0.0,
+        "badge_scan_count":       1.0 if bool(payload.get("badge_scan", False)) else pre_event_raw.get("badge_scan_count", 0.0),
+        "collateral_specificity": collateral_specificity,
+        "buying_cycle_stage":     buying_cycle,
+        "proposal_demo_request":  1.0 if meeting_booked else pre_event_raw.get("proposal_demo_request", 0.0),
+        "meeting_requests_sent":  1.0 if meeting_booked else pre_event_raw.get("meeting_requests_sent", 0.0),
+        "competitive_displacement": 1.0 if buying_group else pre_event_raw.get("competitive_displacement", 0.0),
+        # Preserve pre-event scores
+        "icp_fit_score":          pre_event_raw.get("icp_fit_score", 0.5),
+        "seniority_score":        pre_event_raw.get("seniority_score", 0.3),
+        "profile_completeness":   pre_event_raw.get("profile_completeness", 0.5),
+        "trigger_event_score":    pre_event_raw.get("trigger_event_score", 0.0),
+        "previous_event_history": pre_event_raw.get("previous_event_history", 0.0),
+        "tech_stack_compatibility": pre_event_raw.get("tech_stack_compatibility", 0.0),
+        "company_size_match":     pre_event_raw.get("company_size_match", 0.5),
+        "categories_specificity": pre_event_raw.get("categories_specificity", 0.3),
     }
 
     # Rescore via Modal
