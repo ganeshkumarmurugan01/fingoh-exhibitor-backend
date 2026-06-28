@@ -369,6 +369,37 @@ async def save_research(
     return {"ok": True}
 
 
+# ── Onsite IEI adjustment (deterministic multiplier) ────────────────────────────
+def onsite_adjust(pre_event_iei: float, signals: dict) -> float:
+    """Apply onsite signal multiplier to pre-event IEI score."""
+    cq = signals.get("conv_quality_score")
+    if cq is None:
+        return pre_event_iei
+
+    demo        = float(signals.get("demo_attendance", 0))
+    return_v    = float(signals.get("return_visits", 0))
+    meeting     = float(signals.get("proposal_demo_request", 0))
+    badge       = float(signals.get("badge_scan_count", 0))
+    urgency_buy = float(signals.get("buying_cycle_stage", 0.5))
+    collateral  = float(signals.get("collateral_specificity", 0))
+
+    if cq < 0.2:    base_mult = 0.35
+    elif cq < 0.4:  base_mult = 0.55
+    elif cq < 0.6:  base_mult = 0.75
+    elif cq < 0.8:  base_mult = 0.90
+    else:           base_mult = 1.05
+
+    bonus = (
+        demo        * 8  +
+        return_v    * 10 +
+        meeting     * 12 +
+        badge       * 3  +
+        collateral  * 5  +
+        (urgency_buy - 0.5) * 10
+    )
+    return max(0.0, min(100.0, (pre_event_iei * base_mult) + bonus))
+
+
 # ── Staff App: Log on-site signal for a visitor ───────────────────────────────
 @router.post("/log-signal/{event_id}")
 async def log_signal(
@@ -496,11 +527,9 @@ async def log_signal(
         "categories_specificity": pre_event_raw.get("categories_specificity", 0.3),
     }
 
-    # Rescore via Modal
-    scored = await _score_batch([enriched])
-    score = scored[0] if scored else {"ieiScore": contact.get("iei_score", 50), "regProb": contact.get("reg_prob", 0.5)}
-
-    onsite_score = score["ieiScore"]
+    # Rescore using deterministic onsite multiplier on top of pre-event IEI
+    pre_event_iei = float(contact.get("iei_score") or 50)
+    onsite_score = onsite_adjust(pre_event_iei, enriched)
     onsite_tier  = "Hot" if onsite_score >= 75 else "Warm" if onsite_score >= 50 else "Cool" if onsite_score >= 25 else "Cold"
 
     # Save onsite signals separately
