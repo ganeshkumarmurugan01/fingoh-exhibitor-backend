@@ -508,3 +508,25 @@ async def search_visitors(
         ]
 
     return contacts
+
+# ── AI conversation analysis ──────────────────────────────────────────────────
+@router.post("/ai/analyse-conversation")
+async def analyse_conversation(payload: dict, supabase: Client = Depends(get_supabase)):
+    import anthropic, os
+    visitor = payload.get("visitor", {})
+    conversation = payload.get("conversation", "")
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=600,
+        messages=[{"role":"user","content":f"""You are a B2B sales intelligence agent at a trade fair.
+Visitor: {visitor.get('name')} from {visitor.get('company')} (IEI: {round(visitor.get('iei_score',0))}, {visitor.get('iei_tier','unknown')} tier).
+Conversation: \"{conversation}\"
+Respond ONLY with valid JSON:
+{{\"intentLevel\":\"strong|moderate|weak\",\"scoreDelta\":\"+8\",\"nextQuestion\":\"string\",\"buyingSignals\":[\"1-4 short signals\"],\"missingSignals\":[\"1-3 items\"],\"redFlags\":[\"0-2 items\"],\"recommendedAction\":\"one actionable sentence\",\"followUpHook\":\"one sentence to open follow-up email\"}}"""}]
+    )
+    import json, re
+    text = msg.content[0].text
+    match = re.search(r'\{[\s\S]*\}', text)
+    result = json.loads(match.group(0)) if match else {}
+    return result
