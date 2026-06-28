@@ -449,19 +449,39 @@ async def log_signal(
     scored = await _score_batch([enriched])
     score = scored[0] if scored else {"ieiScore": contact.get("iei_score", 50), "regProb": contact.get("reg_prob", 0.5)}
 
-    # Update contact
+    onsite_score = score["ieiScore"]
+    onsite_tier  = "Hot" if onsite_score >= 75 else "Warm" if onsite_score >= 50 else "Cool" if onsite_score >= 25 else "Cold"
+
+    # Save onsite signals separately
+    onsite_signals = {
+        "conv_quality":         payload.get("conv_quality"),
+        "questions_type":       payload.get("questions_type"),
+        "demo_attendance":      payload.get("demo_attendance"),
+        "return_visit":         payload.get("return_visit"),
+        "collateral_requested": payload.get("collateral_requested"),
+        "badge_scan":           payload.get("badge_scan"),
+        "buying_group":         payload.get("buying_group"),
+        "meeting_booked":       payload.get("meeting_booked"),
+        "urgency":              payload.get("urgency"),
+        "notes":                payload.get("notes"),
+    }
+
+    # Update contact — keep pre-event iei_score, add onsite scores separately
     supabase.table("audience_contacts").update({
-        "raw_data":  raw,
-        "iei_score": score["ieiScore"],
-        "reg_prob":  score.get("regProb", 0.5),
-        "scored_at": "now()",
+        "raw_data":         raw,
+        "onsite_iei_score": onsite_score,
+        "onsite_iei_tier":  onsite_tier,
+        "onsite_signals":   onsite_signals,
+        "scored_at":        "now()",
     }).eq("id", contact["id"]).execute()
 
     return {
-        "ok": True,
-        "iei_score": score["ieiScore"],
-        "iei_tier":  "Hot" if score["ieiScore"] >= 75 else "Warm" if score["ieiScore"] >= 50 else "Cool" if score["ieiScore"] >= 25 else "Cold",
-        "reg_prob":  score.get("regProb", 0.5),
+        "ok":               True,
+        "iei_score":        contact.get("iei_score", 50),   # pre-event unchanged
+        "iei_tier":         contact.get("iei_tier", "Cool"),
+        "onsite_iei_score": onsite_score,
+        "onsite_iei_tier":  onsite_tier,
+        "reg_prob":         score.get("regProb", 0.5),
     }
 
 
