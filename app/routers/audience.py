@@ -547,12 +547,13 @@ async def log_signal(
     }
 
     # Update contact — keep pre-event iei_score, add onsite scores separately
+    import datetime
     supabase.table("audience_contacts").update({
         "raw_data":         raw,
         "onsite_iei_score": onsite_score,
         "onsite_iei_tier":  onsite_tier,
         "onsite_signals":   onsite_signals,
-        "scored_at":        "now()",
+        "scored_at":        datetime.datetime.utcnow().isoformat(),
     }).eq("id", contact["id"]).execute()
 
     # Insert into conversation_signals for duplicate detection
