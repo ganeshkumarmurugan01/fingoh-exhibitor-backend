@@ -586,7 +586,7 @@ async def log_signal(
         "iei_tier":         contact.get("iei_tier", "Cool"),
         "onsite_iei_score": onsite_score,
         "onsite_iei_tier":  onsite_tier,
-        "reg_prob":         score.get("regProb", 0.5),
+        "reg_prob":         float(contact.get("reg_prob") or 0.5),
     }
 
 
