@@ -384,18 +384,29 @@ async def log_signal(
     supabase = get_db()
 
     email = payload.get("email")
-    if not email:
-        raise HTTPException(400, "email required")
+    contact_id = payload.get("contact_id")
 
-    # Fetch existing contact
-    res = (
-        supabase.table("audience_contacts")
-        .select("*")
-        .eq("event_id", event_id)
-        .eq("email", email)
-        .maybe_single()
-        .execute()
-    )
+    # Fetch existing contact by contact_id or email
+    if contact_id:
+        res = (
+            supabase.table("audience_contacts")
+            .select("*")
+            .eq("id", contact_id)
+            .maybe_single()
+            .execute()
+        )
+    elif email:
+        res = (
+            supabase.table("audience_contacts")
+            .select("*")
+            .eq("event_id", event_id)
+            .eq("email", email)
+            .maybe_single()
+            .execute()
+        )
+    else:
+        raise HTTPException(400, "contact_id or email required")
+
     if not res or not res.data:
         raise HTTPException(404, "Visitor not found")
 
@@ -462,6 +473,30 @@ async def log_signal(
         "onsite_signals":   onsite_signals,
         "scored_at":        "now()",
     }).eq("id", contact["id"]).execute()
+
+    # Insert into conversation_signals for duplicate detection
+    try:
+        supabase.table("conversation_signals").insert({
+            "contact_id":           contact["id"],
+            "event_id":             event_id,
+            "staff_name":           payload.get("staff_name", "Staff"),
+            "staff_email":          payload.get("staff_email", ""),
+            "conversation_quality": int(payload.get("conversation_quality") or payload.get("conv_quality") or 0),
+            "question_types":       payload.get("question_types", []),
+            "return_visit":         bool(payload.get("return_visit", False)),
+            "demo_requested":       bool(payload.get("demo_requested", payload.get("demo_attendance", False))),
+            "badge_scan":           bool(payload.get("badge_scan", False)),
+            "buying_group":         bool(payload.get("buying_group", False)),
+            "meeting_booked":       bool(payload.get("meeting_booked", False)),
+            "collateral":           payload.get("collateral", payload.get("collateral_requested", "")),
+            "urgency":              payload.get("urgency", ""),
+            "notes":                payload.get("notes", ""),
+            "ai_intent_level":      payload.get("ai_intent_level"),
+            "ai_buying_signals":    payload.get("ai_buying_signals", []),
+            "ai_score_delta":       payload.get("ai_score_delta"),
+        }).execute()
+    except Exception as e:
+        print(f"[log-signal] conversation_signals insert failed: {e}")
 
     return {
         "ok":               True,
