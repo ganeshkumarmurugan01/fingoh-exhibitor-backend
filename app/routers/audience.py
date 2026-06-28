@@ -386,7 +386,6 @@ async def save_research(
 async def log_signal(
     event_id: str,
     payload: dict,
-    current_user: dict = Depends(get_current_user),
 ):
     """
     Staff logs a conversation signal for a visitor.
@@ -470,15 +469,13 @@ async def log_signal(
 async def search_visitors(
     event_id: str,
     q: str = "",
-    current_user: dict = Depends(get_current_user),
+    request: Request = None,
 ):
-    """Search visitors by name, company, email for Staff App."""
+    """Search visitors by name, company, email for Staff App. No auth required — event_id scopes access."""
     supabase = get_db()
-    query = supabase.table("audience_contacts").select(
+    res = supabase.table("audience_contacts").select(
         "id,name,email,company,designation,city,country,iei_score,iei_tier,reg_prob,raw_data"
-    ).eq("event_id", event_id)
-
-    res = query.order("iei_score", desc=True).execute()
+    ).eq("event_id", event_id).order("iei_score", desc=True).execute()
     contacts = res.data or []
 
     if q:
