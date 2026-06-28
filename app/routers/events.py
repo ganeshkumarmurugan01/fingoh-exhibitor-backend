@@ -158,3 +158,23 @@ def _build_event_detail(event: dict, db) -> dict:
         "icp": icp.data[0] if icp.data else {},
         "intent": intent.data[0] if intent.data else {},
     }
+
+
+@router.get("/public/by-email/{email}")
+async def get_events_for_staff(email: str):
+    """
+    Public endpoint — returns events for the org that has this staff email.
+    Used by Staff App login to show event dropdown.
+    """
+    db = get_db()
+
+    # Find the staff member's org
+    staff_res = db.table("staff").select("org_id").eq("email", email).maybe_single().execute()
+    if not staff_res or not staff_res.data:
+        raise HTTPException(404, "No events found for this email")
+
+    org_id = staff_res.data["org_id"]
+
+    # Get events for this org
+    events_res = db.table("events").select("id,name,date_from,date_to,venue,status").eq("org_id", org_id).execute()
+    return events_res.data or []
