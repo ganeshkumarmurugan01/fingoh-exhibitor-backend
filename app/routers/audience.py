@@ -497,24 +497,32 @@ async def search_visitors(
 
     return contacts
 
-# ── AI conversation analysis ──────────────────────────────────────────────────
+
+
+# AI conversation analysis
 @router.post("/ai/analyse-conversation")
-async def analyse_conversation(payload: dict, supabase: Client = Depends(get_supabase)):
-    import anthropic, os
+async def analyse_conversation(payload: dict):
+    import anthropic, os, json, re
     visitor = payload.get("visitor", {})
     conversation = payload.get("conversation", "")
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    client = anthropic.Anthropic(api_key=api_key)
+    name = visitor.get("name", "Unknown")
+    company = visitor.get("company", "Unknown")
+    score = round(float(visitor.get("iei_score", 0)))
+    tier = visitor.get("iei_tier", "unknown")
+    prompt = (
+        f"You are a B2B sales intelligence agent at a trade fair.\n"
+        f"Visitor: {name} from {company} (IEI: {score}, {tier} tier).\n"
+        f"Conversation: \"{conversation}\"\n"
+        "Respond ONLY with valid JSON (no markdown):\n"
+        '{"intentLevel":"strong|moderate|weak","scoreDelta":"+5","nextQuestion":"one smart follow-up question","buyingSignals":["signal1"],"missingSignals":["gap1"],"redFlags":[],"recommendedAction":"next action","followUpHook":"email opener"}'
+    )
     msg = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=600,
-        messages=[{"role":"user","content":f"""You are a B2B sales intelligence agent at a trade fair.
-Visitor: {visitor.get('name')} from {visitor.get('company')} (IEI: {round(visitor.get('iei_score',0))}, {visitor.get('iei_tier','unknown')} tier).
-Conversation: \"{conversation}\"
-Respond ONLY with valid JSON:
-{{\"intentLevel\":\"strong|moderate|weak\",\"scoreDelta\":\"+8\",\"nextQuestion\":\"string\",\"buyingSignals\":[\"1-4 short signals\"],\"missingSignals\":[\"1-3 items\"],\"redFlags\":[\"0-2 items\"],\"recommendedAction\":\"one actionable sentence\",\"followUpHook\":\"one sentence to open follow-up email\"}}"""}]
+        messages=[{"role": "user", "content": prompt}]
     )
-    import json, re
     text = msg.content[0].text
-    match = re.search(r'\{[\s\S]*\}', text)
-    result = json.loads(match.group(0)) if match else {}
-    return result
+    match = re.search(r"{[\s\S]*}", text)
+    return json.loads(match.group(0)) if match else {}
