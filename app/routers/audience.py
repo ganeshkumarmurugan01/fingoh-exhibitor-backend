@@ -379,3 +379,115 @@ async def save_research(
         {"iei_research": payload.get("iei_research")}
     ).eq("id", contact_id).execute()
     return {"ok": True}
+
+
+# ── Staff App: Log on-site signal for a visitor ───────────────────────────────
+@router.post("/log-signal/{event_id}")
+async def log_signal(
+    event_id: str,
+    payload: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Staff logs a conversation signal for a visitor.
+    Payload: { email, conv_quality, questions_type, demo_attendance,
+               collateral_requested, return_visit, notes }
+    After saving, rescores the visitor via XGBoost.
+    """
+    supabase = get_db()
+
+    email = payload.get("email")
+    if not email:
+        raise HTTPException(400, "email required")
+
+    # Fetch existing contact
+    res = (
+        supabase.table("audience_contacts")
+        .select("*")
+        .eq("event_id", event_id)
+        .eq("email", email)
+        .maybe_single()
+        .execute()
+    )
+    if not res or not res.data:
+        raise HTTPException(404, "Visitor not found")
+
+    contact = res.data
+    raw = contact.get("raw_data") or {}
+
+    # Merge new signals into raw_data
+    signal_fields = [
+        "conv_quality", "questions_type", "demo_attendance",
+        "collateral_requested", "return_visit", "notes",
+        "badge_scan", "dwell_time_min",
+    ]
+    for field in signal_fields:
+        if field in payload:
+            raw[field] = payload[field]
+
+    # Map signals to XGBoost feature names
+    conv_quality    = float(payload.get("conv_quality", raw.get("conv_quality", 0)) or 0)
+    questions_type  = payload.get("questions_type", raw.get("questions_type", "general"))
+    demo_attendance = bool(payload.get("demo_attendance", raw.get("demo_attendance", False)))
+    return_visit    = bool(payload.get("return_visit", raw.get("return_visit", False)))
+    collateral      = payload.get("collateral_requested", raw.get("collateral_requested", "none"))
+
+    # Build enriched visitor for rescoring
+    enriched = {
+        **raw,
+        "conv_quality_score":   conv_quality / 5.0,
+        "questions_type_score": 1.0 if questions_type in ["pricing","implementation"] else 0.7 if questions_type == "technical" else 0.5 if questions_type == "competitive" else 0.2,
+        "demo_attendance":      1.0 if demo_attendance else 0.0,
+        "return_visits":        1.0 if return_visit else 0.0,
+        "collateral_specificity": 1.0 if collateral == "specific" else 0.3 if collateral == "generic" else 0.0,
+        "badge_scan_count":     1.0,
+        "icp_fit_score":        contact.get("raw_data", {}).get("icp_fit_score", 0.5),
+        "seniority_score":      contact.get("raw_data", {}).get("seniority_score", 0.3),
+        "buying_cycle_stage":   contact.get("raw_data", {}).get("buying_cycle_stage", 0.0),
+    }
+
+    # Rescore via Modal
+    scored = await _score_batch([enriched])
+    score = scored[0] if scored else {"ieiScore": contact.get("iei_score", 50), "regProb": contact.get("reg_prob", 0.5)}
+
+    # Update contact
+    supabase.table("audience_contacts").update({
+        "raw_data":  raw,
+        "iei_score": score["ieiScore"],
+        "reg_prob":  score.get("regProb", 0.5),
+        "scored_at": "now()",
+    }).eq("id", contact["id"]).execute()
+
+    return {
+        "ok": True,
+        "iei_score": score["ieiScore"],
+        "iei_tier":  "Hot" if score["ieiScore"] >= 75 else "Warm" if score["ieiScore"] >= 50 else "Cool" if score["ieiScore"] >= 25 else "Cold",
+        "reg_prob":  score.get("regProb", 0.5),
+    }
+
+
+@router.get("/visitors/{event_id}")
+async def search_visitors(
+    event_id: str,
+    q: str = "",
+    current_user: dict = Depends(get_current_user),
+):
+    """Search visitors by name, company, email for Staff App."""
+    supabase = get_db()
+    query = supabase.table("audience_contacts").select(
+        "id,name,email,company,designation,city,country,iei_score,iei_tier,reg_prob,raw_data"
+    ).eq("event_id", event_id)
+
+    res = query.order("iei_score", desc=True).execute()
+    contacts = res.data or []
+
+    if q:
+        q_lower = q.lower()
+        contacts = [
+            c for c in contacts
+            if q_lower in (c.get("name") or "").lower()
+            or q_lower in (c.get("company") or "").lower()
+            or q_lower in (c.get("email") or "").lower()
+        ]
+
+    return contacts
