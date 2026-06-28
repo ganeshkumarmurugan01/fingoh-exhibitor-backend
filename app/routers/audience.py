@@ -225,3 +225,144 @@ async def debug_enrich(payload: dict, current_user: dict = Depends(get_current_u
         "anthropic_key_set": bool(ANTHROPIC_API_KEY),
         "signals": signals,
     }
+
+
+# ── Full IEI Research endpoint ────────────────────────────────────────────────
+@router.post("/research/{contact_id}")
+async def research_contact(
+    contact_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    supabase = get_db()
+
+    # Fetch the contact
+    contact_res = supabase.table("audience_contacts").select("*").eq("id", contact_id).maybe_single().execute()
+    if not contact_res or not contact_res.data:
+        raise HTTPException(404, "Contact not found")
+    contact = contact_res.data
+
+    # Fetch event context
+    event_ctx = _get_event_context(supabase, contact["event_id"])
+
+    # Build exhibition config
+    ex_name    = event_ctx.get("name") or ""
+    ex_industry = ", ".join(event_ctx.get("categories") or [])
+    ex_desc    = event_ctx.get("product") or ""
+    ex_company = event_ctx.get("company") or ""
+    job_functions = event_ctx.get("roles") or []
+    company_types = []
+    custom_criteria = f"Exhibitor: {ex_company}. Products: {ex_desc}" if ex_company else ""
+
+    weights = {"profileMatch": 25, "roleRelevance": 20, "companySignal": 25, "projectSpecificity": 20, "engagementIntent": 10}
+    w = weights
+
+    profile_criteria_lines = []
+    if job_functions:
+        profile_criteria_lines.append(f"Target job functions: {', '.join(job_functions)}")
+    if company_types:
+        profile_criteria_lines.append(f"Target company types: {', '.join(company_types)}")
+    if custom_criteria:
+        profile_criteria_lines.append(f"Additional criteria: {custom_criteria}")
+    profile_criteria = "\n".join(profile_criteria_lines) or "No specific profile defined"
+
+    raw = contact.get("raw_data") or {}
+    visitor_name  = contact.get("name") or ""
+    visitor_title = contact.get("designation") or ""
+    visitor_co    = contact.get("company") or ""
+    visitor_goals = raw.get("primary_reason") or raw.get("categories_interest") or ""
+    visitor_loc   = contact.get("city") or contact.get("country") or ""
+
+    prompt = f"""You are Fingoh.ai — an expert visitor intent intelligence system for B2B exhibitions.
+
+EXHIBITION: {ex_name} | Sector: {ex_industry} | {ex_desc}
+
+IDEAL VISITOR PROFILE:
+{profile_criteria}
+
+SCORING WEIGHTS:
+- Profile match: {w['profileMatch']} pts max
+- Role & seniority: {w['roleRelevance']} pts max
+- Company signals: {w['companySignal']} pts max
+- Project specificity: {w['projectSpecificity']} pts max
+- Engagement intent: {w['engagementIntent']} pts max
+
+CRITICAL SCORING RULES:
+1. If visitor's industry/role does NOT match the ideal profile, score profile_match LOW (0-{round(w['profileMatch'] * 0.25)} pts).
+2. Non-industry visitors (service providers, students, press) must score under 35 total.
+3. Only strong profile matches with active sourcing needs should score 75+.
+
+VISITOR:
+Name: {visitor_name} | Title: {visitor_title} | Company: {visitor_co}
+Goals: {visitor_goals} | Location: {visitor_loc}
+
+Use web search to research this person and company. Look for recent news, funding rounds, product launches, hiring signals, press coverage, and any active procurement or sourcing projects.
+
+Respond ONLY with valid JSON (no markdown):
+{{
+  "visitor": {{"name":"{visitor_name}","title":"{visitor_title}","company":"{visitor_co}","initials":"2 letters","intent_score":<0-100>,"intent_tier":"Hot|Warm|Cool|Cold","profile_match":"Strong match|Partial match|Weak match|No match","profile_match_reason":"one sentence"}},
+  "intelligence_layers": [
+    {{"layer":"Professional profile","color":"purple","signals":["3-4 signals"],"inference":"..."}},
+    {{"layer":"Company intelligence","color":"teal","signals":["3-4 signals"],"inference":"..."}},
+    {{"layer":"Key projects & initiatives","color":"amber","signals":["3-4 signals"],"inference":"..."}},
+    {{"layer":"Need gap analysis","color":"red","signals":["2-3 signals"],"inference":"..."}}
+  ],
+  "synthesised_intent": "2-3 sentences on what they really want at {ex_name}",
+  "intent_dimensions": [
+    {{"type":"Primary","label":"Short label","tags":["tag1","tag2"],"description":"..."}},
+    {{"type":"Secondary","label":"Short label","tags":["tag1"],"description":"..."}},
+    {{"type":"Tertiary","label":"Short label","tags":["tag1"],"description":"..."}},
+    {{"type":"Opportunistic","label":"Short label","tags":["tag1"],"description":"..."}}
+  ],
+  "score_breakdown": {{
+    "profile_match_score":<0-{w['profileMatch']}>,"role_relevance_score":<0-{w['roleRelevance']}>,"company_signal_score":<0-{w['companySignal']}>,"project_specificity_score":<0-{w['projectSpecificity']}>,"engagement_intent_score":<0-{w['engagementIntent']}>,
+    "profile_match_note":"...","role_note":"...","company_note":"...","project_note":"...","intent_note":"..."
+  }},
+  "exhibitor_matches": [
+    {{"name":"...","type":"Zone · category at {ex_name}","match_score":<50-97>,"top_match":true,"reason":"..."}},
+    {{"name":"...","type":"...","match_score":<40-88>,"top_match":false,"reason":"..."}},
+    {{"name":"...","type":"...","match_score":<35-80>,"top_match":false,"reason":"..."}},
+    {{"name":"...","type":"...","match_score":<30-75>,"top_match":false,"reason":"..."}}
+  ],
+  "exhibitor_brief": {{
+    "context":"...","pain_points":"...","what_they_want":"...","dont_do":"...","opening_line":"..."
+  }}
+}}"""
+
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 4000,
+                "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+                "messages": [{"role": "user", "content": prompt}],
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    # Extract text from content blocks
+    text = ""
+    for block in data.get("content", []):
+        if block.get("type") == "text":
+            text += block.get("text", "")
+
+    if not text.strip():
+        raise HTTPException(500, "Empty response from AI")
+
+    # Parse JSON from response
+    import re, json as jsonlib
+    clean = re.sub(r"```json|```", "", text).strip()
+    match = re.search(r"\{[\s\S]*\}", clean)
+    if not match:
+        raise HTTPException(500, "No JSON in AI response")
+
+    return jsonlib.loads(match.group(0))
