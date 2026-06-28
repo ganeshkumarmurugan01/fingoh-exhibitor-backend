@@ -366,3 +366,16 @@ Respond ONLY with valid JSON (no markdown):
         raise HTTPException(500, "No JSON in AI response")
 
     return jsonlib.loads(match.group(0))
+
+
+@router.post("/save-research/{contact_id}")
+async def save_research(
+    contact_id: str,
+    payload: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    supabase = get_db()
+    supabase.table("audience_contacts").update(
+        {"iei_research": payload.get("iei_research")}
+    ).eq("id", contact_id).execute()
+    return {"ok": True}
