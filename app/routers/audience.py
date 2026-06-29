@@ -479,6 +479,23 @@ async def log_signal(
     # Map conversation quality (1-5) to 0-1
     conv_quality_score = conv_quality / 5.0
 
+    # Extract AI analysis signals if available
+    ai_intent_level  = payload.get("ai_intent_level", None)   # "strong"|"moderate"|"weak"|null
+    ai_buying_signals = payload.get("ai_buying_signals", [])  # list of signal strings
+    ai_score_delta   = payload.get("ai_score_delta", None)    # "+5"|"-3" etc
+
+    # Map AI intent level to a score boost
+    ai_intent_score = (
+        1.0 if ai_intent_level == "strong" else
+        0.6 if ai_intent_level == "moderate" else
+        0.2 if ai_intent_level == "weak" else
+        None  # not available
+    )
+
+    # Count high-value buying signals from AI
+    high_value_signals = ["pricing", "budget", "implementation", "timeline", "authority", "decision", "proposal", "contract", "procurement"]
+    ai_signal_count = sum(1 for s in ai_buying_signals if any(k in s.lower() for k in high_value_signals)) if ai_buying_signals else 0
+
     # Map question types to score
     qt = questions_type if isinstance(questions_type, str) else (questions_type[0] if questions_type else "general")
     questions_type_score = (
@@ -542,8 +559,12 @@ async def log_signal(
         "crm_stage_progression":    0.0,
 
         # ── ON-SITE SIGNALS — full weight, these are ground truth ──────────────
-        "conv_quality_score":       conv_quality_score,        # 0-1 from 1-5 rating
-        "questions_type_score":     questions_type_score,      # 0-1 from question type
+        # If AI analysis available, blend with staff rating for conv quality
+        "conv_quality_score":       (conv_quality_score * 0.6 + ai_intent_score * 0.4)
+                                    if ai_intent_score is not None
+                                    else conv_quality_score,
+        # Boost questions score if AI detected high-value buying signals
+        "questions_type_score":     min(1.0, questions_type_score + (ai_signal_count * 0.1)),
         "demo_attendance":          1.0 if demo_attendance else 0.0,
         "return_visits":            1.0 if return_visit else 0.0,
         "badge_scan_count":         1.0 if bool(payload.get("badge_scan", False)) else 0.0,
@@ -742,6 +763,9 @@ async def check_signal(contact_id: str):
                 "notes":                sig.get("notes"),
                 "staff_name":           sig.get("staff_name"),
                 "created_at":           sig.get("created_at"),
+                "ai_intent_level":      sig.get("ai_intent_level"),
+                "ai_buying_signals":    sig.get("ai_buying_signals"),
+                "ai_score_delta":       sig.get("ai_score_delta"),
             },
             "logged_by":  sig.get("staff_name", "a staff member"),
             "logged_at":  sig.get("created_at"),
