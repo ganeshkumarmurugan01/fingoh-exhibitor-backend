@@ -389,14 +389,17 @@ def onsite_adjust(pre_event_iei: float, signals: dict) -> float:
     elif cq < 0.8:  base_mult = 0.90
     else:           base_mult = 1.05
 
-    bonus = (
-        demo        * 8  +
-        return_v    * 10 +
-        meeting     * 12 +
-        badge       * 3  +
-        collateral  * 5  +
-        (urgency_buy - 0.5) * 10
+    # Bonus signals — capped at +15 total to avoid score inflation
+    # Each signal nudges the score but can't push a mid-tier visitor to 100
+    raw_bonus = (
+        demo        * 4  +
+        return_v    * 5  +
+        meeting     * 6  +
+        badge       * 2  +
+        collateral  * 3  +
+        (urgency_buy - 0.5) * 5
     )
+    bonus = min(raw_bonus, 15.0)  # hard cap on bonus
     return max(0.0, min(100.0, (pre_event_iei * base_mult) + bonus))
 
 
