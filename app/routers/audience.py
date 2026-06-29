@@ -651,14 +651,33 @@ async def analyse_conversation(payload: dict):
 # ── Check if signal already logged today ─────────────────────────────────────
 @router.get("/check-signal/{contact_id}")
 async def check_signal(contact_id: str):
-    """Check if a signal was already logged for this contact today."""
-    import datetime
+    """Check if a signal was already logged for this contact — return full signal for pre-population."""
     supabase = get_db()
-    today = datetime.date.today().isoformat()
-    res = supabase.table("conversation_signals").select(
-        "id,staff_name,created_at"
-    ).eq("contact_id", contact_id).gte("created_at", today).order("created_at", desc=True).limit(1).execute()
+    res = supabase.table("conversation_signals").select("*").eq(
+        "contact_id", contact_id
+    ).order("created_at", desc=True).limit(1).execute()
     signals = res.data or []
     if signals:
-        return {"already_logged": True, "logged_by": signals[0].get("staff_name", "a staff member"), "logged_at": signals[0].get("created_at")}
-    return {"already_logged": False}
+        sig = signals[0]
+        return {
+            "exists": True,
+            "signal": {
+                "conversation_quality": sig.get("conversation_quality"),
+                "question_types":       sig.get("question_types"),
+                "return_visit":         sig.get("return_visit"),
+                "demo_requested":       sig.get("demo_requested"),
+                "badge_scan":           sig.get("badge_scan"),
+                "buying_group":         sig.get("buying_group"),
+                "meeting_booked":       sig.get("meeting_booked"),
+                "collateral":           sig.get("collateral"),
+                "urgency":              sig.get("urgency"),
+                "notes":                sig.get("notes"),
+                "staff_name":           sig.get("staff_name"),
+                "created_at":           sig.get("created_at"),
+            },
+            "logged_by":  sig.get("staff_name", "a staff member"),
+            "logged_at":  sig.get("created_at"),
+            # backward compat
+            "already_logged": True,
+        }
+    return {"exists": False, "already_logged": False}
