@@ -530,10 +530,32 @@ async def log_signal(
         "categories_specificity": pre_event_raw.get("categories_specificity", 0.3),
     }
 
-    # Rescore using deterministic onsite multiplier on top of pre-event IEI
+    # Rescore using full 41-signal XGBoost model on Modal
     pre_event_iei = float(contact.get("iei_score") or 50)
-    onsite_score = onsite_adjust(pre_event_iei, enriched)
-    onsite_tier  = "Hot" if onsite_score >= 75 else "Warm" if onsite_score >= 50 else "Cool" if onsite_score >= 25 else "Cold"
+    onsite_score = pre_event_iei  # fallback if Modal unavailable
+    onsite_tier  = contact.get("iei_tier") or "Cool"
+
+    if MODAL_SCORER_URL:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as modal_client:
+                modal_resp = await modal_client.post(
+                    MODAL_SCORER_URL,
+                    json={"visitors": [enriched]}
+                )
+                if modal_resp.status_code == 200:
+                    modal_data = modal_resp.json()
+                    scores = modal_data.get("scores", [])
+                    if scores:
+                        onsite_score = float(scores[0].get("ieiScore", pre_event_iei))
+                        onsite_tier  = scores[0].get("ieiTier", onsite_tier)
+        except Exception as modal_err:
+            # Fall back to deterministic multiplier if Modal fails
+            onsite_score = onsite_adjust(pre_event_iei, enriched)
+            onsite_tier  = "Hot" if onsite_score >= 75 else "Warm" if onsite_score >= 50 else "Cool" if onsite_score >= 25 else "Cold"
+    else:
+        # No Modal URL — use deterministic multiplier as fallback
+        onsite_score = onsite_adjust(pre_event_iei, enriched)
+        onsite_tier  = "Hot" if onsite_score >= 75 else "Warm" if onsite_score >= 50 else "Cool" if onsite_score >= 25 else "Cold"
 
     # Save onsite signals separately
     onsite_signals = {
