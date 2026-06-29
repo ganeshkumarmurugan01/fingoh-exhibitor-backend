@@ -606,16 +606,38 @@ async def log_signal(
 
                         # Bonus for strong signals
                         signal_bonus = (
-                            (10 if meeting_booked else 0) +
-                            (8  if return_visit else 0) +
-                            (6  if demo_attendance else 0) +
-                            (3  if bool(payload.get("badge_scan", False)) else 0) +
-                            (buying_cycle - 0.5) * 10  # urgency adjustment
+                            (4 if meeting_booked else 0) +
+                            (3 if return_visit else 0) +
+                            (2 if demo_attendance else 0) +
+                            (1 if bool(payload.get("badge_scan", False)) else 0) +
+                            (buying_cycle - 0.5) * 4
                         )
-                        signal_bonus = max(-10, min(signal_bonus, 15))  # cap -10 to +15
+                        signal_bonus = max(-5, min(signal_bonus, 8))  # hard cap -5 to +8
+
+                        # Add AI score delta if available
+                        if ai_score_delta:
+                            try:
+                                signal_bonus += float(str(ai_score_delta).replace("+","")) * 0.5
+                            except: pass
+                        signal_bonus = max(-5, min(signal_bonus, 8))
 
                         onsite_score = (xgb_score * xgb_weight) + (onsite_quality_score * onsite_weight) + signal_bonus
-                        onsite_score = max(0.0, min(100.0, onsite_score))
+
+                        # ICP fit as multiplier (0.5–1.0) — non-ICP visitors can't hit top scores
+                        icp_fit = float(enriched.get("icp_fit_score", 0.5))
+                        icp_multiplier = 0.5 + (icp_fit * 0.5)
+                        onsite_score = onsite_score * icp_multiplier
+
+                        # Score ceiling scales with key signals fired — need ALL signals for 90+
+                        key_signals_count = sum([
+                            1 if conv_quality >= 4 else 0,
+                            1 if meeting_booked else 0,
+                            1 if return_visit else 0,
+                            1 if demo_attendance else 0,
+                            1 if buying_cycle >= 0.8 else 0,
+                        ])
+                        max_score = 55 + (key_signals_count * 9)  # 55 to 100, needs all 5 for 100
+                        onsite_score = max(0.0, min(float(max_score), onsite_score))
                         onsite_tier  = "Hot" if onsite_score >= 75 else "Warm" if onsite_score >= 50 else "Cool" if onsite_score >= 25 else "Cold"
         except Exception as modal_err:
             onsite_score = onsite_adjust(pre_event_iei, enriched)
