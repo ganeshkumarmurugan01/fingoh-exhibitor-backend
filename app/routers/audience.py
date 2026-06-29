@@ -572,14 +572,34 @@ async def log_signal(
                     modal_data = modal_resp.json()
                     scores = modal_data.get("scores", [])
                     if scores:
-                        onsite_score = float(scores[0].get("ieiScore", pre_event_iei))
-                        onsite_tier  = scores[0].get("ieiTier", onsite_tier)
+                        xgb_score = float(scores[0].get("ieiScore", pre_event_iei))
+
+                        # Blend XGBoost with onsite quality signal
+                        # conv_quality_score is 0-1 (from 1-5 staff rating)
+                        # At conv_quality=0.0 (score 1): onsite_weight=0.8 → XGB pulled toward 0
+                        # At conv_quality=1.0 (score 5): onsite_weight=0.8 → XGB pulled toward 100
+                        # Firmographic floor: even terrible engagement keeps 20% of XGBoost
+                        onsite_quality_score = conv_quality_score * 100  # 0-100
+                        onsite_weight = 0.7   # onsite signals dominate
+                        xgb_weight    = 0.3   # firmographic baseline
+
+                        # Bonus for strong signals
+                        signal_bonus = (
+                            (10 if meeting_booked else 0) +
+                            (8  if return_visit else 0) +
+                            (6  if demo_attendance else 0) +
+                            (3  if bool(payload.get("badge_scan", False)) else 0) +
+                            (buying_cycle - 0.5) * 10  # urgency adjustment
+                        )
+                        signal_bonus = max(-10, min(signal_bonus, 15))  # cap -10 to +15
+
+                        onsite_score = (xgb_score * xgb_weight) + (onsite_quality_score * onsite_weight) + signal_bonus
+                        onsite_score = max(0.0, min(100.0, onsite_score))
+                        onsite_tier  = "Hot" if onsite_score >= 75 else "Warm" if onsite_score >= 50 else "Cool" if onsite_score >= 25 else "Cold"
         except Exception as modal_err:
-            # Fall back to deterministic multiplier if Modal fails
             onsite_score = onsite_adjust(pre_event_iei, enriched)
             onsite_tier  = "Hot" if onsite_score >= 75 else "Warm" if onsite_score >= 50 else "Cool" if onsite_score >= 25 else "Cold"
     else:
-        # No Modal URL — use deterministic multiplier as fallback
         onsite_score = onsite_adjust(pre_event_iei, enriched)
         onsite_tier  = "Hot" if onsite_score >= 75 else "Warm" if onsite_score >= 50 else "Cool" if onsite_score >= 25 else "Cold"
 
