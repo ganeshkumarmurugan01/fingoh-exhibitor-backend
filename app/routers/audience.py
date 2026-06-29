@@ -505,29 +505,55 @@ async def log_signal(
     buying_group   = bool(payload.get("buying_group", False))
 
     enriched = {
-        # Preserve all pre-event signals
-        **pre_event_raw,
-        # Overlay on-site signals
-        "job_title":              contact.get("designation", pre_event_raw.get("job_title", "")),
-        "conv_quality_score":     conv_quality_score,
-        "questions_type_score":   questions_type_score,
-        "demo_attendance":        1.0 if demo_attendance else 0.0,
-        "return_visits":          1.0 if return_visit else 0.0,
-        "badge_scan_count":       1.0 if bool(payload.get("badge_scan", False)) else pre_event_raw.get("badge_scan_count", 0.0),
-        "collateral_specificity": collateral_specificity,
-        "buying_cycle_stage":     buying_cycle,
-        "proposal_demo_request":  1.0 if meeting_booked else pre_event_raw.get("proposal_demo_request", 0.0),
-        "meeting_requests_sent":  1.0 if meeting_booked else pre_event_raw.get("meeting_requests_sent", 0.0),
-        "competitive_displacement": 1.0 if buying_group else pre_event_raw.get("competitive_displacement", 0.0),
-        # Preserve pre-event scores
-        "icp_fit_score":          pre_event_raw.get("icp_fit_score", 0.5),
-        "seniority_score":        pre_event_raw.get("seniority_score", 0.3),
-        "profile_completeness":   pre_event_raw.get("profile_completeness", 0.5),
-        "trigger_event_score":    pre_event_raw.get("trigger_event_score", 0.0),
-        "previous_event_history": pre_event_raw.get("previous_event_history", 0.0),
+        # ── Firmographic signals — these don't change on-site, preserve as-is ──
+        "job_title":                contact.get("designation", pre_event_raw.get("job_title", "")),
+        "icp_fit_score":            pre_event_raw.get("icp_fit_score", 0.5),
+        "seniority_score":          pre_event_raw.get("seniority_score", 0.3),
+        "profile_completeness":     pre_event_raw.get("profile_completeness", 0.5),
+        "company_size_match":       pre_event_raw.get("company_size_match", 0.5),
+        "categories_specificity":   pre_event_raw.get("categories_specificity", 0.3),
         "tech_stack_compatibility": pre_event_raw.get("tech_stack_compatibility", 0.0),
-        "company_size_match":     pre_event_raw.get("company_size_match", 0.5),
-        "categories_specificity": pre_event_raw.get("categories_specificity", 0.3),
+        "previous_event_history":   pre_event_raw.get("previous_event_history", 0.0),
+        "trigger_event_score":      pre_event_raw.get("trigger_event_score", 0.0),
+
+        # ── Pre-event registration signals — discount heavily (onsite overrides) ──
+        "reg_timing_days":          pre_event_raw.get("reg_timing_days", 0) * 0.3,
+        "email_open_rate":          pre_event_raw.get("email_open_rate", 0.0) * 0.2,
+        "email_click_rate":         pre_event_raw.get("email_click_rate", 0.0) * 0.2,
+        "microsite_visits":         pre_event_raw.get("microsite_visits", 0) * 0.2,
+        "app_session_count":        pre_event_raw.get("app_session_count", 0) * 0.2,
+        "content_downloads":        pre_event_raw.get("content_downloads", 0) * 0.2,
+        "session_reg_count":        pre_event_raw.get("session_reg_count", 0) * 0.2,
+        "social_mentions":          pre_event_raw.get("social_mentions", 0) * 0.2,
+        "pre_event_content_eng":    pre_event_raw.get("pre_event_content_eng", 0.0) * 0.2,
+        "meeting_requests_received":pre_event_raw.get("meeting_requests_received", 0) * 0.2,
+        "meeting_acceptance_rate":  pre_event_raw.get("meeting_acceptance_rate", 0.0) * 0.2,
+        "meeting_no_show_rate":     pre_event_raw.get("meeting_no_show_rate", 0.0),
+        "private_room_bookings":    pre_event_raw.get("private_room_bookings", 0) * 0.2,
+        "matchmaking_engagement":   pre_event_raw.get("matchmaking_engagement", 0.0) * 0.2,
+
+        # ── Post-event signals — zero out (not applicable during event) ──
+        "followup_response_hrs":    0.0,
+        "post_event_content_eng":   0.0,
+        "website_visit_post":       0.0,
+        "internal_content_share":   0.0,
+        "roi_report_published":     0.0,
+        "social_amplification":     0.0,
+        "crm_stage_progression":    0.0,
+
+        # ── ON-SITE SIGNALS — full weight, these are ground truth ──────────────
+        "conv_quality_score":       conv_quality_score,        # 0-1 from 1-5 rating
+        "questions_type_score":     questions_type_score,      # 0-1 from question type
+        "demo_attendance":          1.0 if demo_attendance else 0.0,
+        "return_visits":            1.0 if return_visit else 0.0,
+        "badge_scan_count":         1.0 if bool(payload.get("badge_scan", False)) else 0.0,
+        "collateral_specificity":   collateral_specificity,    # 0-1 from collateral type
+        "buying_cycle_stage":       buying_cycle,              # 0-1 from urgency
+        "proposal_demo_request":    1.0 if meeting_booked else 0.0,
+        "meeting_requests_sent":    1.0 if meeting_booked else 0.0,
+        "competitive_displacement": 1.0 if buying_group else 0.0,
+        "booth_dwell_time_min":     0.0,  # not captured yet
+        "session_attend_ratio":     0.0,  # not captured yet
     }
 
     # Rescore using full 41-signal XGBoost model on Modal
