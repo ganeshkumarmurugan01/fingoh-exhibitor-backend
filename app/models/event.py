@@ -68,6 +68,18 @@ class EventUpdate(BaseModel):
     booth_size: Optional[str] = None
 
 
+class TargetingUpdate(BaseModel):
+    """Update categories, ICP, and exhibitor intent — all optional, partial update."""
+    categories: Optional[List[str]] = None
+    icp_roles: Optional[List[str]] = None
+    icp_company_sizes: Optional[List[str]] = None
+    icp_visit_reasons: Optional[List[str]] = None
+    intent_why: Optional[str] = None
+    intent_buyers: Optional[str] = None
+    intent_signals: Optional[List[dict]] = None
+    buyer_signals: Optional[List[dict]] = None
+
+
 # ── Responses ─────────────────────────────────────────────────────────────────
 
 class EventResponse(BaseModel):

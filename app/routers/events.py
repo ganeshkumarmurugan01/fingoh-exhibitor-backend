@@ -6,6 +6,7 @@ from app.models.event import (
     EventUpdate,
     EventResponse,
     EventDetailResponse,
+    TargetingUpdate,
 )
 from typing import List
 
@@ -119,6 +120,52 @@ def update_event(
         .execute()
     )
     return _build_event_detail(result.data[0], db)
+
+
+@router.patch("/{event_id}/targeting", response_model=EventDetailResponse)
+def update_targeting(
+    event_id: str,
+    payload: TargetingUpdate,
+    current_user: dict = Depends(get_current_user),
+):
+    """Update categories, ICP, and exhibitor intent — upserts into related tables."""
+    db = get_db()
+    org_id = get_user_org(current_user["user_id"], db)
+    event = _get_event_or_404(event_id, org_id, db)
+
+    # Categories — replace entirely if provided
+    if payload.categories is not None:
+        db.table("event_categories").delete().eq("event_id", event_id).execute()
+        if payload.categories:
+            cats = [{"event_id": event_id, "category": c} for c in payload.categories]
+            db.table("event_categories").insert(cats).execute()
+
+    # ICP — upsert (update if exists, insert if not)
+    icp_fields = {}
+    if payload.icp_roles is not None: icp_fields["roles"] = payload.icp_roles
+    if payload.icp_company_sizes is not None: icp_fields["company_sizes"] = payload.icp_company_sizes
+    if payload.icp_visit_reasons is not None: icp_fields["visit_reasons"] = payload.icp_visit_reasons
+    if icp_fields:
+        existing_icp = db.table("event_icp").select("id").eq("event_id", event_id).execute()
+        if existing_icp.data:
+            db.table("event_icp").update(icp_fields).eq("event_id", event_id).execute()
+        else:
+            db.table("event_icp").insert({"event_id": event_id, **icp_fields}).execute()
+
+    # Intent — upsert
+    intent_fields = {}
+    if payload.intent_why is not None: intent_fields["intent_why"] = payload.intent_why
+    if payload.intent_buyers is not None: intent_fields["intent_buyers"] = payload.intent_buyers
+    if payload.intent_signals is not None: intent_fields["intent_signals"] = payload.intent_signals
+    if payload.buyer_signals is not None: intent_fields["buyer_signals"] = payload.buyer_signals
+    if intent_fields:
+        existing_intent = db.table("event_intent").select("id").eq("event_id", event_id).execute()
+        if existing_intent.data:
+            db.table("event_intent").update(intent_fields).eq("event_id", event_id).execute()
+        else:
+            db.table("event_intent").insert({"event_id": event_id, **intent_fields}).execute()
+
+    return _build_event_detail(event, db)
 
 
 @router.delete("/{event_id}", status_code=204)
