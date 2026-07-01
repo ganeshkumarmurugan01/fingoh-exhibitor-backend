@@ -16,6 +16,7 @@ ZOHO_CLIENT_SECRET = os.getenv("ZOHO_CLIENT_SECRET")
 ZOHO_REFRESH_TOKEN = os.getenv("ZOHO_REFRESH_TOKEN")
 ZOHO_FROM_EMAIL    = os.getenv("ZOHO_FROM_EMAIL", "noreply@fingoh.ai")
 ZOHO_FROM_NAME     = os.getenv("ZOHO_FROM_NAME", "Fingoh")
+ZOHO_ACCOUNT_ID    = os.getenv("ZOHO_ACCOUNT_ID", "670863000000008002")
 FRONTEND_URL       = os.getenv("FRONTEND_URL", "https://fingoh-exhibitor.vercel.app")
 
 
