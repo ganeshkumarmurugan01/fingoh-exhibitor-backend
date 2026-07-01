@@ -88,3 +88,4 @@ Set these environment variables in Railway dashboard → Variables:
 | PATCH | /api/v1/staff/{id} | Update staff member |
 | DELETE | /api/v1/staff/{id} | Remove staff member |
 | POST | /api/v1/staff/verify-login | Staff App email login |
+# meetings router added Wed Jul  1 17:16:14 IST 2026
