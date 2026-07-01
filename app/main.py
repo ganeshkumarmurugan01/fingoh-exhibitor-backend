@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.routers import onboarding, events, staff
 from app.routers import audience
+from app.routers import meetings
 
 settings = get_settings()
 
@@ -27,6 +28,7 @@ app.include_router(onboarding.router, prefix=API_PREFIX)
 app.include_router(events.router, prefix=API_PREFIX)
 app.include_router(staff.router, prefix=API_PREFIX)
 app.include_router(audience.router, prefix=API_PREFIX)
+app.include_router(meetings.router, prefix=API_PREFIX)
 
 @app.get("/health", tags=["system"])
 def health():
