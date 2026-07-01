@@ -110,7 +110,7 @@ async def send_meeting_email(
                     "fromAddress": ZOHO_FROM_EMAIL,
                     "toAddress":   to_email,
                     "subject":     f"Meeting Request from {exhibitor_company}",
-                    "htmlbody":    html_body,
+                    "content":     html_body,
                     "mailFormat":  "html",
                 }
             )
