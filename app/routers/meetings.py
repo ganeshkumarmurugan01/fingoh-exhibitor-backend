@@ -18,6 +18,8 @@ ZOHO_FROM_EMAIL    = os.getenv("ZOHO_FROM_EMAIL", "noreply@fingoh.ai")
 ZOHO_FROM_NAME     = os.getenv("ZOHO_FROM_NAME", "Fingoh")
 ZOHO_ACCOUNT_ID    = os.getenv("ZOHO_ACCOUNT_ID", "670863000000008002")
 FRONTEND_URL       = os.getenv("FRONTEND_URL", "https://fingoh-exhibitor.vercel.app")
+# TEST MODE: if set, all emails go to this address instead of the real contact email
+TEST_EMAIL_OVERRIDE = os.getenv("TEST_EMAIL_OVERRIDE", "")
 
 
 class MeetingCreate(BaseModel):
@@ -317,9 +319,10 @@ async def create_meeting_request(
 
     # Send email
     email_sent = False
-    if contact.get("email"):
+    contact_email = TEST_EMAIL_OVERRIDE if TEST_EMAIL_OVERRIDE else contact.get("email", "")
+    if contact_email:
         email_sent = await send_meeting_email(
-            to_email=contact["email"],
+            to_email=contact_email,
             to_name=contact.get("name", contact["email"]),
             meeting_id=meeting_id,
             accept_token=accept_token,
