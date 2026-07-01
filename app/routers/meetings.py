@@ -124,6 +124,50 @@ async def send_meeting_email(
         return False
 
 
+
+@router.get("/respond/{token}")
+async def respond_to_meeting(token: str, action: str = None):
+    """Public endpoint — visitor clicks Accept/Decline link in email."""
+    db = get_db()
+
+    # Find token
+    token_res = db.table("meeting_tokens").select("*").eq("token", token).maybe_single().execute()
+    if not token_res or not token_res.data:
+        raise HTTPException(404, "Invalid or expired link")
+
+    token_row = token_res.data
+    if token_row["used"]:
+        return {"status": "already_responded", "action": token_row["action"]}
+
+    # Check expiry
+    expires = datetime.datetime.fromisoformat(token_row["expires_at"].replace("Z",""))
+    if datetime.datetime.utcnow() > expires:
+        raise HTTPException(410, "This link has expired")
+
+    # Determine action from token or query param
+    final_action = token_row["action"] if not action else action
+
+    # Update meeting status
+    new_status = "accepted" if final_action == "accept" else "declined"
+    db.table("meeting_requests").update({
+        "status": new_status,
+        "responded_at": datetime.datetime.utcnow().isoformat(),
+    }).eq("id", token_row["meeting_id"]).execute()
+
+    # Mark token as used
+    db.table("meeting_tokens").update({"used": True}).eq("id", token_row["id"]).execute()
+
+    # Get meeting details for response page
+    meeting_res = db.table("meeting_requests").select(
+        "*, audience_contacts(name, email, company)"
+    ).eq("id", token_row["meeting_id"]).maybe_single().execute()
+    meeting = meeting_res.data if meeting_res and meeting_res.data else {}
+
+    return {
+        "status": new_status,
+        "action": final_action,
+        "meeting": meeting,
+    }
 @router.get("/{event_id}")
 async def list_meetings(
     event_id: str,
@@ -292,50 +336,6 @@ async def create_meeting_request(
 
     return {**meeting, "email_sent": email_sent}
 
-
-@router.get("/respond/{token}")
-async def respond_to_meeting(token: str, action: str = None):
-    """Public endpoint — visitor clicks Accept/Decline link in email."""
-    db = get_db()
-
-    # Find token
-    token_res = db.table("meeting_tokens").select("*").eq("token", token).maybe_single().execute()
-    if not token_res or not token_res.data:
-        raise HTTPException(404, "Invalid or expired link")
-
-    token_row = token_res.data
-    if token_row["used"]:
-        return {"status": "already_responded", "action": token_row["action"]}
-
-    # Check expiry
-    expires = datetime.datetime.fromisoformat(token_row["expires_at"].replace("Z",""))
-    if datetime.datetime.utcnow() > expires:
-        raise HTTPException(410, "This link has expired")
-
-    # Determine action from token or query param
-    final_action = token_row["action"] if not action else action
-
-    # Update meeting status
-    new_status = "accepted" if final_action == "accept" else "declined"
-    db.table("meeting_requests").update({
-        "status": new_status,
-        "responded_at": datetime.datetime.utcnow().isoformat(),
-    }).eq("id", token_row["meeting_id"]).execute()
-
-    # Mark token as used
-    db.table("meeting_tokens").update({"used": True}).eq("id", token_row["id"]).execute()
-
-    # Get meeting details for response page
-    meeting_res = db.table("meeting_requests").select(
-        "*, audience_contacts(name, email, company)"
-    ).eq("id", token_row["meeting_id"]).maybe_single().execute()
-    meeting = meeting_res.data if meeting_res and meeting_res.data else {}
-
-    return {
-        "status": new_status,
-        "action": final_action,
-        "meeting": meeting,
-    }
 
 
 @router.patch("/{meeting_id}/complete")
