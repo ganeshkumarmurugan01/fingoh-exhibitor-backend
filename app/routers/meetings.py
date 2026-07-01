@@ -204,26 +204,77 @@ async def get_meeting_prospects(
     requested = {m["contact_id"]: m["status"] for m in (meetings_res.data or [])}
 
     # Score contacts using LambdaMART
-    visitors_payload = []
-    for c in contacts:
+    def derive_features(c):
+        """Derive LambdaMART features from available contact data."""
         raw = c.get("raw_data") or {}
-        visitors_payload.append({
+        title = (c.get("designation") or "").lower()
+        reason = (c.get("primary_reason") or "").lower()
+        cats = c.get("categories_interest") or ""
+        company_size = (c.get("company_size") or "").lower()
+
+        # Seniority from job title
+        if any(x in title for x in ["ceo","cto","cfo","chief","president","md","managing director"]):
+            seniority = 1.0
+        elif any(x in title for x in ["vp","vice","svp","director","head"]):
+            seniority = 0.85
+        elif any(x in title for x in ["manager","senior","lead","principal"]):
+            seniority = 0.6
+        elif any(x in title for x in ["engineer","analyst","executive","specialist"]):
+            seniority = 0.35
+        else:
+            seniority = 0.3
+
+        # Company size match (larger = more likely to need meetings)
+        if any(x in company_size for x in ["10000","5000"]):
+            size_score = 1.0
+        elif any(x in company_size for x in ["2000","1000"]):
+            size_score = 0.8
+        elif any(x in company_size for x in ["500","200"]):
+            size_score = 0.6
+        elif any(x in company_size for x in ["50","100"]):
+            size_score = 0.4
+        else:
+            size_score = 0.5
+
+        # Buying intent from visit reason
+        buying_signals = ["sourcing","procurement","vendor","supplier","evaluating","purchase","buy","rfp","tender","contract"]
+        buying_score = 0.8 if any(x in reason for x in buying_signals) else 0.3
+
+        # Category specificity — more categories = more specific interest
+        cat_count = len([c for c in cats.split(",") if c.strip()]) if cats else 0
+        cat_score = min(cat_count / 3.0, 1.0)
+
+        # ICP fit from iei_score (normalized)
+        iei = c.get("iei_score") or 50
+        icp_fit = min(iei / 100.0, 1.0)
+
+        # Profile completeness — how many fields are filled
+        fields = [c.get("designation"), c.get("company"), c.get("country"),
+                  c.get("primary_reason"), c.get("linkedin_url"), c.get("company_size")]
+        completeness = sum(1 for f in fields if f) / len(fields)
+
+        # Reg prob as proxy for attendance commitment
+        reg_prob = c.get("reg_prob") or 0.5
+
+        return {
             "job_title":              c.get("designation", ""),
-            "iei_score":              c.get("iei_score", 50),
-            "icp_fit_score":          raw.get("icp_fit_score", 0.5),
-            "buying_cycle_stage":     raw.get("buying_cycle_stage", 0.3),
+            "iei_score":              iei,
+            "icp_fit_score":          icp_fit,
+            "buying_cycle_stage":     buying_score,
             "microsite_visits":       raw.get("microsite_visits", 0),
             "content_downloads":      raw.get("content_downloads", 0),
             "email_click_rate":       raw.get("email_click_rate", 0),
             "meeting_requests_sent":  raw.get("meeting_requests_sent", 0),
-            "profile_completeness":   raw.get("profile_completeness", 0.5),
-            "categories_specificity": raw.get("categories_specificity", 0.3),
+            "profile_completeness":   completeness,
+            "categories_specificity": cat_score,
             "reg_timing_days":        raw.get("reg_timing_days", 45),
-            "trigger_event_score":    raw.get("trigger_event_score", 0),
+            "trigger_event_score":    buying_score * reg_prob,
             "competitive_displacement": raw.get("competitive_displacement", 0),
             "previous_event_history": raw.get("previous_event_history", 0),
-            "company_size_match":     raw.get("company_size_match", 0.5),
-        })
+            "company_size_match":     size_score,
+        }
+
+    visitors_payload = [derive_features(c) for c in contacts]
 
     # Call Modal LambdaMART scorer
     match_scores = {}
