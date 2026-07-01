@@ -20,6 +20,17 @@ def _get_event_context(supabase, event_id: str) -> dict:
     return context
 
 
+def _parse_meeting_interest(val):
+    """Parse meeting_interest field from CSV — accepts yes/no/true/false/1/0."""
+    if val is None:
+        return None
+    v = str(val).strip().lower()
+    if v in ("yes","true","1","y"):
+        return True
+    if v in ("no","false","0","n"):
+        return False
+    return None
+
 # ── Claude enrichment — extracts signals for one visitor ─────────────────────
 async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncClient) -> dict:
     if not ANTHROPIC_API_KEY:
@@ -167,6 +178,7 @@ async def upload_audience(
             "iei_score":   s["ieiScore"],
             "reg_prob":    s["regProb"],
             "scored_at":   "now()",
+            "meeting_interest": _parse_meeting_interest(_get(r, "meeting_interest")),
         }
         for r, s in zip(enriched_rows, scored)
     ]
