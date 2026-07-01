@@ -142,8 +142,9 @@ async def respond_to_meeting(token: str, action: str = None):
         return {"status": "already_responded", "action": token_row["action"]}
 
     # Check expiry
-    expires = datetime.datetime.fromisoformat(token_row["expires_at"].replace("Z",""))
-    if datetime.datetime.utcnow() > expires:
+    expires = datetime.datetime.fromisoformat(token_row["expires_at"].replace("Z","+00:00"))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if now > expires:
         raise HTTPException(410, "This link has expired")
 
     # Determine action from token or query param
