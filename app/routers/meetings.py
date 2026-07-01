@@ -103,8 +103,10 @@ async def send_meeting_email(
     try:
         access_token = await get_zoho_access_token()
         async with httpx.AsyncClient() as client:
+            account_id = ZOHO_ACCOUNT_ID or "670863000000008002"
+            print(f"[EMAIL] Sending to {to_email} from {ZOHO_FROM_EMAIL} via account {account_id}")
             resp = await client.post(
-                "https://mail.zoho.com/api/accounts/me/messages",
+                f"https://mail.zoho.com/api/accounts/{account_id}/messages",
                 headers={"Authorization": f"Zoho-oauthtoken {access_token}"},
                 json={
                     "fromAddress": ZOHO_FROM_EMAIL,
@@ -114,9 +116,10 @@ async def send_meeting_email(
                     "mailFormat":  "html",
                 }
             )
+            print(f"[EMAIL] Response: {resp.status_code} {resp.text[:300]}")
             return resp.status_code == 200
     except Exception as e:
-        print(f"Email send failed: {e}")
+        print(f"[EMAIL] Send failed: {e}")
         return False
 
 
