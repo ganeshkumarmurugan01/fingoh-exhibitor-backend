@@ -203,7 +203,24 @@ async def list_contacts(
         .order("iei_score", desc=True)
         .execute()
     )
-    return res.data
+    contacts = res.data or []
+
+    # Get contact IDs that have signals for THIS event only
+    sigs_res = (
+        supabase.table("conversation_signals")
+        .select("contact_id")
+        .eq("event_id", event_id)
+        .execute()
+    )
+    contacts_with_signals = {s["contact_id"] for s in (sigs_res.data or [])}
+
+    # Null out onsite scores for contacts without current-event signals
+    for c in contacts:
+        if c["id"] not in contacts_with_signals:
+            c["onsite_iei_score"] = None
+            c["onsite_iei_tier"]  = None
+
+    return contacts
 
 
 def _get(row: dict, key: str) -> str | None:
