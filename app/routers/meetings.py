@@ -171,6 +171,33 @@ async def respond_to_meeting(token: str, action: str = None):
         "action": final_action,
         "meeting": meeting,
     }
+@router.get("/staff/{event_id}")
+async def list_meetings_for_staff(event_id: str):
+    """
+    Public — no org JWT. Staff App Meetings tab calls this (staff are
+    authenticated via email/event verify-login, not org auth).
+    Returns accepted meetings for the event, contact details attached,
+    soonest first.
+    """
+    db = get_db()
+    res = db.table("meeting_requests").select(
+        "*, audience_contacts(name, email, designation, company, phone)"
+    ).eq("event_id", event_id).eq("status", "accepted").order("proposed_datetime").execute()
+    return res.data or []
+
+
+@router.patch("/staff/{meeting_id}/complete")
+async def complete_meeting_staff(meeting_id: str, payload: MeetingComplete):
+    """Public — Staff App marks a meeting completed + adds notes on the floor."""
+    db = get_db()
+    db.table("meeting_requests").update({
+        "status": "completed",
+        "completed_at": datetime.datetime.utcnow().isoformat(),
+        "staff_completion_notes": payload.staff_completion_notes,
+    }).eq("id", meeting_id).execute()
+    return {"status": "completed"}
+
+
 @router.get("/{event_id}")
 async def list_meetings(
     event_id: str,
@@ -256,22 +283,39 @@ async def get_meeting_prospects(
         # Reg prob as proxy for attendance commitment
         reg_prob = c.get("reg_prob") or 0.5
 
+        # Meeting interest — direct registration signal (strongest predictor)
+        meeting_interest = c.get("meeting_interest")
+        if meeting_interest is True:
+            meeting_interest_score = 1.0
+        elif meeting_interest is False:
+            meeting_interest_score = 0.0
+        else:
+            meeting_interest_score = 0.5  # unknown
+
+        # Boost trigger score significantly if meeting_interest is True
+        trigger = buying_score * reg_prob
+        if meeting_interest is True:
+            trigger = min(trigger + 0.4, 1.0)
+        elif meeting_interest is False:
+            trigger = max(trigger - 0.3, 0.0)
+
         return {
             "job_title":              c.get("designation", ""),
             "iei_score":              iei,
             "icp_fit_score":          icp_fit,
-            "buying_cycle_stage":     buying_score,
+            "buying_cycle_stage":     buying_score if meeting_interest is not True else min(buying_score + 0.3, 1.0),
             "microsite_visits":       raw.get("microsite_visits", 0),
             "content_downloads":      raw.get("content_downloads", 0),
             "email_click_rate":       raw.get("email_click_rate", 0),
-            "meeting_requests_sent":  raw.get("meeting_requests_sent", 0),
+            "meeting_requests_sent":  1.0 if meeting_interest is True else raw.get("meeting_requests_sent", 0),
             "profile_completeness":   completeness,
             "categories_specificity": cat_score,
             "reg_timing_days":        raw.get("reg_timing_days", 45),
-            "trigger_event_score":    buying_score * reg_prob,
+            "trigger_event_score":    trigger,
             "competitive_displacement": raw.get("competitive_displacement", 0),
             "previous_event_history": raw.get("previous_event_history", 0),
             "company_size_match":     size_score,
+            "meeting_interest":       meeting_interest_score,
         }
 
     visitors_payload = [derive_features(c) for c in contacts]

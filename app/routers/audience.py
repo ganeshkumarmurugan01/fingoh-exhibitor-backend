@@ -220,6 +220,27 @@ async def list_contacts(
             c["onsite_iei_score"] = None
             c["onsite_iei_tier"]  = None
 
+    # Get meeting requests for this event, most recent per contact, for the
+    # Live Dashboard "Meeting Status" column.
+    meetings_res = (
+        supabase.table("meeting_requests")
+        .select("id, contact_id, status, proposed_datetime, duration_minutes, "
+                "location, topic, notes, staff_completion_notes, completed_at, created_at")
+        .eq("event_id", event_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    meeting_by_contact = {}
+    for m in (meetings_res.data or []):
+        # keep only the most recent meeting per contact (results are already
+        # ordered created_at desc, so first occurrence wins)
+        meeting_by_contact.setdefault(m["contact_id"], m)
+
+    for c in contacts:
+        m = meeting_by_contact.get(c["id"])
+        c["meeting_status"] = m["status"] if m else None
+        c["meeting"] = m
+
     return contacts
 
 
