@@ -216,7 +216,7 @@ async def list_contacts(
 
     # Null out onsite scores for contacts without current-event signals
     for c in contacts:
-        if c["id"] not in contacts_with_signals:
+        if c["id"] not in contacts_with_signals and c.get("onsite_iei_score") is None:
             c["onsite_iei_score"] = None
             c["onsite_iei_tier"]  = None
 
