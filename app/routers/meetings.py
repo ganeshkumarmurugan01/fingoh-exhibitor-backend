@@ -34,8 +34,20 @@ class MeetingCreate(BaseModel):
     requested_by_email: Optional[str] = None
 
 
+class AIAnalysis(BaseModel):
+    intentLevel: Optional[str] = None
+    scoreDelta: Optional[str] = None
+    recommendedAction: Optional[str] = None
+    buyingSignals: Optional[List[str]] = None
+    redFlags: Optional[List[str]] = None
+    followUpHook: Optional[str] = None
+
+
 class MeetingComplete(BaseModel):
     staff_completion_notes: Optional[str] = None
+    actual_start_time: Optional[str] = None   # ISO string, staff "Start Now" tap
+    actual_end_time: Optional[str] = None     # ISO string, staff "End Now" tap
+    ai_analysis: Optional[AIAnalysis] = None  # structured, for historic analysis + model retraining
 
 
 async def get_zoho_access_token() -> str:
@@ -186,15 +198,38 @@ async def list_meetings_for_staff(event_id: str):
     return res.data or []
 
 
+def _build_completion_update(payload: MeetingComplete) -> dict:
+    """Shared by both /complete endpoints. Folds a short readable AI summary
+    into staff_completion_notes while keeping the full structured analysis
+    in ai_analysis (jsonb) for later retraining/aggregation."""
+    update = {
+        "status": "completed",
+        "completed_at": datetime.datetime.utcnow().isoformat(),
+        "staff_completion_notes": payload.staff_completion_notes,
+    }
+    if payload.actual_start_time:
+        update["actual_start_time"] = payload.actual_start_time
+    if payload.actual_end_time:
+        update["actual_end_time"] = payload.actual_end_time
+    if payload.ai_analysis:
+        a = payload.ai_analysis
+        update["ai_analysis"] = a.dict()
+        summary_bits = []
+        if a.intentLevel: summary_bits.append(f"Intent: {a.intentLevel}")
+        if a.recommendedAction: summary_bits.append(f"Next: {a.recommendedAction}")
+        if a.followUpHook: summary_bits.append(f"Follow-up: {a.followUpHook}")
+        if summary_bits:
+            summary = " · ".join(summary_bits)
+            base_notes = (payload.staff_completion_notes or "").strip()
+            update["staff_completion_notes"] = f"{base_notes}\n\n[AI] {summary}".strip()
+    return update
+
+
 @router.patch("/staff/{meeting_id}/complete")
 async def complete_meeting_staff(meeting_id: str, payload: MeetingComplete):
     """Public — Staff App marks a meeting completed + adds notes on the floor."""
     db = get_db()
-    db.table("meeting_requests").update({
-        "status": "completed",
-        "completed_at": datetime.datetime.utcnow().isoformat(),
-        "staff_completion_notes": payload.staff_completion_notes,
-    }).eq("id", meeting_id).execute()
+    db.table("meeting_requests").update(_build_completion_update(payload)).eq("id", meeting_id).execute()
     return {"status": "completed"}
 
 
@@ -445,11 +480,7 @@ async def complete_meeting(
 ):
     """Mark a meeting as completed (called from Staff App)."""
     db = get_db()
-    db.table("meeting_requests").update({
-        "status": "completed",
-        "completed_at": datetime.datetime.utcnow().isoformat(),
-        "staff_completion_notes": payload.staff_completion_notes,
-    }).eq("id", meeting_id).execute()
+    db.table("meeting_requests").update(_build_completion_update(payload)).eq("id", meeting_id).execute()
     return {"status": "completed"}
 
 

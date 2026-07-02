@@ -225,7 +225,8 @@ async def list_contacts(
     meetings_res = (
         supabase.table("meeting_requests")
         .select("id, contact_id, status, proposed_datetime, duration_minutes, "
-                "location, topic, notes, staff_completion_notes, completed_at, created_at")
+                "location, topic, notes, staff_completion_notes, completed_at, created_at, "
+                "actual_start_time, actual_end_time, ai_analysis")
         .eq("event_id", event_id)
         .order("created_at", desc=True)
         .execute()
