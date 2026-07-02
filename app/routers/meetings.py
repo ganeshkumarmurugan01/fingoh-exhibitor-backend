@@ -4,6 +4,7 @@ Fingoh Meeting Requests — endpoints for match scoring, request sending, and st
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import get_current_user, get_user_org
 from app.database import get_db
+from app.routers.audience import apply_onsite_signal
 from pydantic import BaseModel
 from typing import Optional, List
 import os, httpx, secrets, datetime
@@ -48,6 +49,8 @@ class MeetingComplete(BaseModel):
     actual_start_time: Optional[str] = None   # ISO string, staff "Start Now" tap
     actual_end_time: Optional[str] = None     # ISO string, staff "End Now" tap
     ai_analysis: Optional[AIAnalysis] = None  # structured, for historic analysis + model retraining
+    staff_name: Optional[str] = None          # who completed it, for the onsite signal
+    staff_email: Optional[str] = None
 
 
 async def get_zoho_access_token() -> str:
@@ -183,18 +186,17 @@ async def respond_to_meeting(token: str, action: str = None):
         "action": final_action,
         "meeting": meeting,
     }
+
 @router.get("/staff/{event_id}")
 async def list_meetings_for_staff(event_id: str):
     """
-    Public — no org JWT. Staff App Meetings tab calls this (staff are
-    authenticated via email/event verify-login, not org auth).
-    Returns accepted meetings for the event, contact details attached,
-    soonest first.
+    Public — no org JWT. Staff App Meetings tab calls this.
+    Returns accepted + completed meetings so completed cards stay visible.
     """
     db = get_db()
     res = db.table("meeting_requests").select(
         "*, audience_contacts(name, email, designation, company, phone)"
-    ).eq("event_id", event_id).eq("status", "accepted").order("proposed_datetime").execute()
+    ).eq("event_id", event_id).in_("status", ["accepted", "completed"]).order("proposed_datetime").execute()
     return res.data or []
 
 
@@ -225,11 +227,62 @@ def _build_completion_update(payload: MeetingComplete) -> dict:
     return update
 
 
+def _meeting_signal_payload(payload: MeetingComplete) -> dict:
+    """
+    A completed meeting is itself a strong onsite signal — build a payload
+    apply_onsite_signal() can score, even when the visitor never had a
+    separate logged conversation.
+    conv_quality defaults to a solid baseline (a scheduled 1:1 happened) and
+    is nudged by the AI intent read, if one was captured.
+    """
+    conv_quality = 4  # baseline: completed scheduled meeting, out of 5
+    ai_intent_level = None
+    ai_buying_signals = []
+    ai_score_delta = None
+    if payload.ai_analysis:
+        a = payload.ai_analysis
+        ai_intent_level = a.intentLevel
+        ai_buying_signals = a.buyingSignals or []
+        ai_score_delta = a.scoreDelta
+        conv_quality = {"strong": 5, "moderate": 4, "weak": 2}.get(a.intentLevel, 4)
+
+    return {
+        "meeting_booked": True,
+        "meeting_completed": True,
+        "conv_quality": conv_quality,
+        "conversation_quality": conv_quality,
+        "notes": payload.staff_completion_notes or "",
+        "staff_name": payload.staff_name or "Staff",
+        "staff_email": payload.staff_email or "",
+        "ai_intent_level": ai_intent_level,
+        "ai_buying_signals": ai_buying_signals,
+        "ai_score_delta": ai_score_delta,
+    }
+
+
+async def _log_meeting_completion_signal(db, meeting_id: str, payload: MeetingComplete):
+    """Fetch the meeting + contact and feed the completion into the shared
+    onsite scoring pipeline. Best-effort — a scoring hiccup shouldn't block
+    the meeting from being marked complete."""
+    try:
+        meeting_res = db.table("meeting_requests").select("event_id, contact_id").eq("id", meeting_id).maybe_single().execute()
+        if not meeting_res or not meeting_res.data:
+            return
+        event_id, contact_id = meeting_res.data["event_id"], meeting_res.data["contact_id"]
+        contact_res = db.table("audience_contacts").select("*").eq("id", contact_id).maybe_single().execute()
+        if not contact_res or not contact_res.data:
+            return
+        await apply_onsite_signal(db, event_id, contact_res.data, _meeting_signal_payload(payload))
+    except Exception as e:
+        print(f"[meetings] onsite signal logging failed: {e}")
+
+
 @router.patch("/staff/{meeting_id}/complete")
 async def complete_meeting_staff(meeting_id: str, payload: MeetingComplete):
     """Public — Staff App marks a meeting completed + adds notes on the floor."""
     db = get_db()
     db.table("meeting_requests").update(_build_completion_update(payload)).eq("id", meeting_id).execute()
+    await _log_meeting_completion_signal(db, meeting_id, payload)
     return {"status": "completed"}
 
 
@@ -481,6 +534,7 @@ async def complete_meeting(
     """Mark a meeting as completed (called from Staff App)."""
     db = get_db()
     db.table("meeting_requests").update(_build_completion_update(payload)).eq("id", meeting_id).execute()
+    await _log_meeting_completion_signal(db, meeting_id, payload)
     return {"status": "completed"}
 
 

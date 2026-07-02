@@ -496,6 +496,15 @@ async def log_signal(
         raise HTTPException(404, "Visitor not found")
 
     contact = res.data
+    return await apply_onsite_signal(supabase, event_id, contact, payload)
+
+
+# ── Shared onsite scoring + signal logging ──────────────────────────────────
+# Used by both the Staff App's log-signal flow (in-conversation signals) and
+# the Meetings "mark complete" flow (a completed meeting is itself a strong
+# onsite signal, even when the visitor never had a separate logged
+# conversation — e.g. they went straight into a scheduled meeting).
+async def apply_onsite_signal(supabase, event_id: str, contact: dict, payload: dict) -> dict:
     raw = contact.get("raw_data") or {}
 
     # Merge new signals into raw_data
@@ -707,6 +716,7 @@ async def log_signal(
         "badge_scan":           payload.get("badge_scan"),
         "buying_group":         payload.get("buying_group"),
         "meeting_booked":       payload.get("meeting_booked"),
+        "meeting_completed":    payload.get("meeting_completed"),
         "urgency":              payload.get("urgency"),
         "notes":                payload.get("notes"),
     }
@@ -735,6 +745,7 @@ async def log_signal(
             "badge_scan":           bool(payload.get("badge_scan", False)),
             "buying_group":         bool(payload.get("buying_group", False)),
             "meeting_booked":       bool(payload.get("meeting_booked", False)),
+            "meeting_completed":    bool(payload.get("meeting_completed", False)),
             "collateral":           payload.get("collateral", payload.get("collateral_requested", "")),
             "urgency":              payload.get("urgency", ""),
             "notes":                payload.get("notes", ""),
