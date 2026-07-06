@@ -4,6 +4,7 @@ from app.config import get_settings
 from app.routers import onboarding, events, staff
 from app.routers import audience
 from app.routers import meetings
+from app.routers import crm
 
 settings = get_settings()
 
@@ -29,6 +30,7 @@ app.include_router(events.router, prefix=API_PREFIX)
 app.include_router(staff.router, prefix=API_PREFIX)
 app.include_router(audience.router, prefix=API_PREFIX)
 app.include_router(meetings.router, prefix=API_PREFIX)
+app.include_router(crm.router, prefix=API_PREFIX)
 
 @app.get("/health", tags=["system"])
 def health():
