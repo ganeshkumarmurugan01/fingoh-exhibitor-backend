@@ -190,7 +190,7 @@ async def zoho_callback(
 
 @router.post("/zoho/sync")
 async def zoho_sync(
-    event_id: str,
+    event_id: str = Query(...),
     current_user: dict = Depends(get_current_user),
 ):
     supabase     = get_db()
