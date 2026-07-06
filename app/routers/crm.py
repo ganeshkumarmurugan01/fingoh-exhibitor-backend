@@ -194,7 +194,7 @@ async def zoho_sync(
     current_user: dict = Depends(get_current_user),
 ):
     supabase     = get_db()
-    exhibitor_id = get_user_org(current_user)
+    exhibitor_id = get_user_org(current_user["id"], get_db())
 
     conn = supabase.table("crm_connections")\
         .select("refresh_token")\
