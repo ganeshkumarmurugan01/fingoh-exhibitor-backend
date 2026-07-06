@@ -4,6 +4,7 @@ Fingoh CRM Integration — Zoho CRM OAuth + contact sync endpoints.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from app.auth import get_current_user
+from app.routers.audience import _score_batch, _enrich_visitor
 from app.database import get_db
 import os, httpx, json
 from typing import Optional
@@ -211,6 +212,15 @@ async def zoho_sync(
         for r in zoho_records
         if r.get("Email")
     ]
+
+    # Score contacts via XGBoost
+    scored = await _score_batch(rows)
+
+    # Merge scores into rows
+    for row, score in zip(rows, scored):
+        row["iei_score"] = score["ieiScore"]
+        row["reg_prob"]  = score["regProb"]
+        row["scored_at"] = "now()"
 
     synced = 0
     for i in range(0, len(rows), 100):
