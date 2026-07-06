@@ -3,7 +3,7 @@ Fingoh CRM Integration — Zoho CRM OAuth + contact sync endpoints.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
-from app.auth import get_current_user, get_user_org
+from app.auth import get_current_user
 from app.database import get_db
 import os, httpx, json
 from typing import Optional
@@ -68,7 +68,7 @@ async def _fetch_zoho_contacts(access_token: str) -> list:
     return contacts
 
 
-def _map_zoho_contact(record: dict, event_id: str, exhibitor_id: str) -> dict:
+def _map_zoho_contact(record: dict, event_id: str) -> dict:
     first = (record.get("First_Name") or "").strip()
     last  = (record.get("Last_Name")  or "").strip()
     name  = f"{first} {last}".strip() or record.get("Email", "Unknown")
@@ -99,7 +99,6 @@ def _map_zoho_contact(record: dict, event_id: str, exhibitor_id: str) -> dict:
 
     return {
         "event_id":      event_id,
-        "exhibitor_id":  exhibitor_id,
         "name":          name,
         "email":         record.get("Email") or "",
         "phone":         record.get("Phone") or "",
@@ -194,8 +193,6 @@ async def zoho_sync(
     current_user: dict = Depends(get_current_user),
 ):
     supabase     = get_db()
-    exhibitor_id = get_user_org(current_user["user_id"], get_db())
-
     conn = supabase.table("crm_connections")\
         .select("refresh_token")\
         .eq("event_id", event_id)\
@@ -210,7 +207,7 @@ async def zoho_sync(
     zoho_records  = await _fetch_zoho_contacts(access_token)
 
     rows = [
-        _map_zoho_contact(r, event_id, exhibitor_id)
+        _map_zoho_contact(r, event_id)
         for r in zoho_records
         if r.get("Email")
     ]
