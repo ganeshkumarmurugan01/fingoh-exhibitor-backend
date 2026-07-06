@@ -213,11 +213,24 @@ async def zoho_sync(
         if r.get("Email")
     ]
 
+    # Enrich contacts with Claude signals before scoring
+    import asyncio
+    event_ctx = {}  # basic context — will be enriched by Claude
+    enriched_rows = rows
+    if True:  # always enrich
+        async with httpx.AsyncClient() as http_client:
+            sem = asyncio.Semaphore(3)
+            async def enrich_one(row):
+                async with sem:
+                    signals = await _enrich_visitor(row, event_ctx, http_client)
+                    return {**row, **signals}
+            enriched_rows = await asyncio.gather(*[enrich_one(r) for r in rows])
+
     # Score contacts via XGBoost
-    scored = await _score_batch(rows)
+    scored = await _score_batch(enriched_rows)
 
     # Merge scores into rows
-    for row, score in zip(rows, scored):
+    for row, score in zip(enriched_rows, scored):
         row["iei_score"] = score["ieiScore"]
         row["reg_prob"]  = score["regProb"]
         row["scored_at"] = "now()"
