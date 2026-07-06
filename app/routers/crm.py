@@ -4,7 +4,7 @@ Fingoh CRM Integration — Zoho CRM OAuth + contact sync endpoints.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from app.auth import get_current_user
-from app.routers.audience import _score_batch, _enrich_visitor
+from app.routers.audience import _score_batch, _enrich_visitor, _get_event_context
 from app.database import get_db
 import os, httpx, json
 from typing import Optional
@@ -215,7 +215,7 @@ async def zoho_sync(
 
     # Enrich contacts with Claude signals before scoring
     import asyncio
-    event_ctx = {}  # basic context — will be enriched by Claude
+    event_ctx = _get_event_context(supabase, event_id)
     enriched_rows = rows
     if True:  # always enrich
         async with httpx.AsyncClient() as http_client:
@@ -233,15 +233,15 @@ async def zoho_sync(
     for row, score in zip(enriched_rows, scored):
         row["iei_score"] = score["ieiScore"]
         row["reg_prob"]  = score["regProb"]
-        row["scored_at"] = "now()"
+        from datetime import datetime, timezone; row["scored_at"] = datetime.now(timezone.utc).isoformat()
 
     synced = 0
-    for i in range(0, len(rows), 100):
+    for i in range(0, len(enriched_rows), 100):
         supabase.table("audience_contacts").upsert(
-            rows[i:i+100],
+            enriched_rows[i:i+100],
             on_conflict="event_id,email"
         ).execute()
-        synced += len(rows[i:i+100])
+        synced += len(enriched_rows[i:i+100])
 
     supabase.table("crm_connections").update({
         "status":         "synced",
