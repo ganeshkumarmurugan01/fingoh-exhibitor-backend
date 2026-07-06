@@ -235,13 +235,22 @@ async def zoho_sync(
         row["reg_prob"]  = score["regProb"]
         from datetime import datetime, timezone; row["scored_at"] = datetime.now(timezone.utc).isoformat()
 
+    # Keep only known DB columns before upsert
+    ALLOWED_COLS = {
+        "event_id","name","email","company","designation","phone",
+        "city","country","source","notes","industry","company_size",
+        "crm_source","crm_record_id","iei_score","reg_prob","scored_at",
+        "meeting_interest","iei_tier","raw_data",
+    }
+    clean_rows = [{k: v for k, v in r.items() if k in ALLOWED_COLS} for r in enriched_rows]
+
     synced = 0
-    for i in range(0, len(enriched_rows), 100):
+    for i in range(0, len(clean_rows), 100):
         supabase.table("audience_contacts").upsert(
-            enriched_rows[i:i+100],
+            clean_rows[i:i+100],
             on_conflict="event_id,email"
         ).execute()
-        synced += len(enriched_rows[i:i+100])
+        synced += len(clean_rows[i:i+100])
 
     supabase.table("crm_connections").update({
         "status":         "synced",
