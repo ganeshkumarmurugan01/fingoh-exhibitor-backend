@@ -547,3 +547,77 @@ async def cancel_meeting(
     db = get_db()
     db.table("meeting_requests").update({"status": "cancelled"}).eq("id", meeting_id).execute()
     return {"status": "cancelled"}
+
+
+class MeetingReschedule(BaseModel):
+    proposed_datetime: str
+    duration_minutes: int = 30
+    location: Optional[str] = None
+    topic: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@router.patch("/{meeting_id}/reschedule")
+async def reschedule_meeting(
+    meeting_id: str,
+    payload: MeetingReschedule,
+    current_user: dict = Depends(get_current_user),
+):
+    """Reschedule a meeting — update datetime, reset to pending, resend email."""
+    db = get_db()
+
+    # Get existing meeting
+    meeting_res = db.table("meeting_requests").select("*").eq("id", meeting_id).maybe_single().execute()
+    if not meeting_res or not meeting_res.data:
+        raise HTTPException(404, "Meeting not found")
+    meeting = meeting_res.data
+
+    # Get contact details
+    contact_res = db.table("audience_contacts").select("*").eq("id", meeting["contact_id"]).maybe_single().execute()
+    contact = contact_res.data if contact_res and contact_res.data else {}
+
+    # Get event details
+    event_res = db.table("events").select("name, company").eq("id", meeting["event_id"]).maybe_single().execute()
+    event = event_res.data if event_res and event_res.data else {}
+
+    # Update meeting record
+    db.table("meeting_requests").update({
+        "proposed_datetime": payload.proposed_datetime,
+        "duration_minutes":  payload.duration_minutes,
+        "location":          payload.location,
+        "topic":             payload.topic,
+        "notes":             payload.notes,
+        "status":            "pending",
+        "completed_at":      None,
+    }).eq("id", meeting_id).execute()
+
+    # Create new accept/decline tokens
+    accept_token  = secrets.token_hex(32)
+    decline_token = secrets.token_hex(32)
+
+    db.table("meeting_tokens").insert([
+        {"meeting_id": meeting_id, "token": accept_token,  "action": "accept"},
+        {"meeting_id": meeting_id, "token": decline_token, "action": "decline"},
+    ]).execute()
+
+    # Resend email
+    email_sent = False
+    contact_email = TEST_EMAIL_OVERRIDE if TEST_EMAIL_OVERRIDE else contact.get("email", "")
+    if contact_email:
+        email_sent = await send_meeting_email(
+            to_email=contact_email,
+            to_name=contact.get("name", contact.get("email", "")),
+            meeting_id=meeting_id,
+            accept_token=accept_token,
+            decline_token=decline_token,
+            meeting_details={
+                "proposed_datetime": payload.proposed_datetime,
+                "duration_minutes":  payload.duration_minutes,
+                "location":          payload.location,
+                "topic":             payload.topic,
+                "notes":             payload.notes,
+            },
+            exhibitor_company=event.get("company", "The exhibitor"),
+        )
+
+    return {"ok": True, "status": "pending", "email_sent": email_sent}
