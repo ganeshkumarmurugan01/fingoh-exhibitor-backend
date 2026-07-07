@@ -164,7 +164,7 @@ async def create_customer(
     user_id   = user_data["id"]
 
     # Create profile
-    db.table("profiles").insert({
+    db.table("profiles").upsert({
         "id":     user_id,
         "org_id": org_id,
         "name":   payload.admin_name,
