@@ -286,3 +286,153 @@ async def zoho_disconnect(
         .eq("provider", "zoho")\
         .execute()
     return {"ok": True}
+
+
+# ── Helper: build Zoho CRM Lead payload from Fingoh contact ──────────────────
+
+def _build_zoho_lead(contact: dict, event: dict) -> dict:
+    """Map a Fingoh contact + event to a Zoho CRM Lead record."""
+    event_name = event.get("name", "Trade Fair")
+    iei_score  = contact.get("onsite_iei_score") or contact.get("iei_score") or 0
+    iei_tier   = contact.get("onsite_iei_tier")  or contact.get("iei_tier")  or ""
+    reg_prob   = contact.get("reg_prob")
+    attend_pct = f"{round(reg_prob*100)}%" if reg_prob is not None else "—"
+
+    # Build comprehensive notes from all available signals
+    notes_parts = [f"=== Fingoh Event Intelligence — {event_name} ===\n"]
+
+    notes_parts.append(f"IEI Score: {round(iei_score, 1)} ({iei_tier} tier)")
+    notes_parts.append(f"Attendance Probability: {attend_pct}")
+
+    meeting = contact.get("meeting")
+    if meeting:
+        notes_parts.append(f"\n--- Meeting ---")
+        notes_parts.append(f"Status: {meeting.get('status','—')}")
+        if meeting.get("proposed_datetime"):
+            notes_parts.append(f"Scheduled: {meeting['proposed_datetime']}")
+        if meeting.get("topic"):
+            notes_parts.append(f"Topic: {meeting['topic']}")
+        if meeting.get("staff_completion_notes"):
+            notes_parts.append(f"Staff Notes: {meeting['staff_completion_notes']}")
+        if meeting.get("ai_analysis"):
+            notes_parts.append(f"AI Analysis: {meeting['ai_analysis']}")
+
+    iei_research = contact.get("iei_research")
+    if iei_research:
+        notes_parts.append(f"\n--- IEI Research ---")
+        if isinstance(iei_research, dict):
+            for k, v in iei_research.items():
+                if v:
+                    notes_parts.append(f"{k}: {v}")
+        else:
+            notes_parts.append(str(iei_research))
+
+    notes_parts.append(f"\nSource: Fingoh · {event_name}")
+    notes_parts.append(f"Exported: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
+
+    description = "\n".join(notes_parts)
+
+    # Split name
+    name_parts = (contact.get("name") or "").split(" ", 1)
+    first_name = name_parts[0] if name_parts else ""
+    last_name  = name_parts[1] if len(name_parts) > 1 else ""
+
+    return {
+        "First_Name":   first_name,
+        "Last_Name":    last_name or first_name or "Unknown",
+        "Email":        contact.get("email") or "",
+        "Phone":        contact.get("phone") or "",
+        "Title":        contact.get("designation") or "",
+        "Company":      contact.get("company") or "",
+        "Industry":     contact.get("industry") or "",
+        "Lead_Source":  f"Exhibition — {event_name}",
+        "Description":  description,
+        "Tag":          [{"name": "fingoh-lead"}, {"name": event_name}],
+    }
+
+
+# ── Push leads to Zoho CRM ────────────────────────────────────────────────────
+
+@router.post("/zoho/push-leads")
+async def push_leads_to_zoho(
+    event_id: str = Query(...),
+    tiers: str = Query("Hot,Warm"),  # comma-separated tiers to push
+    current_user: dict = Depends(get_current_user),
+):
+    """Push Hot/Warm leads from a Fingoh event into Zoho CRM as Leads."""
+    supabase = get_db()
+
+    # Get CRM connection
+    conn = supabase.table("crm_connections")\
+        .select("refresh_token")\
+        .eq("event_id", event_id)\
+        .eq("provider", "zoho")\
+        .single()\
+        .execute()
+
+    if not conn.data:
+        raise HTTPException(404, "Zoho CRM not connected for this event")
+
+    access_token = await _get_crm_access_token(conn.data["refresh_token"])
+
+    # Get event details
+    event_res = supabase.table("events").select("name,company").eq("id", event_id).maybe_single().execute()
+    event = event_res.data if event_res and event_res.data else {}
+
+    # Get contacts for this event with meeting + research data
+    contacts_res = supabase.table("audience_contacts")\
+        .select("*")\
+        .eq("event_id", event_id)\
+        .execute()
+    contacts = contacts_res.data or []
+
+    # Get meetings for this event
+    meetings_res = supabase.table("meeting_requests")\
+        .select("*")\
+        .eq("event_id", event_id)\
+        .execute()
+    meeting_by_contact = {}
+    for m in (meetings_res.data or []):
+        meeting_by_contact.setdefault(m["contact_id"], m)
+
+    for c in contacts:
+        c["meeting"] = meeting_by_contact.get(c["id"])
+
+    # Filter by requested tiers
+    tier_list = [t.strip() for t in tiers.split(",")]
+    leads = [
+        c for c in contacts
+        if (c.get("onsite_iei_tier") or c.get("iei_tier")) in tier_list
+    ]
+
+    if not leads:
+        return {"ok": True, "pushed": 0, "message": "No leads matching requested tiers"}
+
+    # Build Zoho Lead payloads
+    zoho_leads = [_build_zoho_lead(c, event) for c in leads]
+
+    # Push to Zoho CRM in batches of 100
+    headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
+    pushed = 0
+    errors = []
+
+    for i in range(0, len(zoho_leads), 100):
+        batch = zoho_leads[i:i+100]
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                "https://www.zohoapis.com/crm/v3/Leads",
+                headers=headers,
+                json={"data": batch, "trigger": ["workflow"]},
+            )
+        if r.status_code in (200, 201):
+            result = r.json()
+            pushed += len([d for d in result.get("data", []) if d.get("code") in ("SUCCESS", "DUPLICATE_DATA")])
+        else:
+            errors.append(f"Batch {i//100+1}: {r.status_code} {r.text[:200]}")
+
+    return {
+        "ok":     len(errors) == 0,
+        "pushed": pushed,
+        "errors": errors,
+        "total":  len(leads),
+    }
