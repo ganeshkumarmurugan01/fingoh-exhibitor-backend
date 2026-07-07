@@ -74,7 +74,7 @@ async def get_zoho_access_token() -> str:
 async def send_meeting_email(
     to_email: str, to_name: str,
     meeting_id: str, accept_token: str, decline_token: str,
-    meeting_details: dict, exhibitor_company: str
+    meeting_details: dict, exhibitor_company: str,
     is_reschedule: bool = False,
 ):
     """Send meeting request email via Zoho Mail API."""
