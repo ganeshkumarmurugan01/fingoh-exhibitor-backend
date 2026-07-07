@@ -75,6 +75,7 @@ async def send_meeting_email(
     to_email: str, to_name: str,
     meeting_id: str, accept_token: str, decline_token: str,
     meeting_details: dict, exhibitor_company: str
+    is_reschedule: bool = False,
 ):
     """Send meeting request email via Zoho Mail API."""
     accept_url  = f"{FRONTEND_URL}/meeting?token={accept_token}&action=accept"
@@ -89,12 +90,12 @@ async def send_meeting_email(
     html_body = f"""
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
       <div style="background: #0D1B3E; padding: 24px; border-radius: 8px 8px 0 0;">
-        <h1 style="color: white; margin: 0; font-size: 22px;">Meeting Request</h1>
+       <h1 style="color: white; margin: 0; font-size: 22px;">{'&#8635; Meeting Rescheduled' if is_reschedule else 'Meeting Request'}</h1>
         <p style="color: rgba(255,255,255,0.7); margin: 4px 0 0 0; font-size: 14px;">from {exhibitor_company}</p>
       </div>
       <div style="background: white; padding: 24px; border: 1px solid #E2E8F0;">
         <p style="font-size: 16px; color: #1E293B;">Dear {to_name},</p>
-        <p style="color: #475569;">{exhibitor_company} would like to schedule a meeting with you at the event.</p>
+       <p style="color: #475569;">{'The meeting details have been updated. Please review the new time below.' if is_reschedule else f'{exhibitor_company} would like to schedule a meeting with you at the event.'}</p>
         
         <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 16px; margin: 20px 0;">
           <p style="margin: 0 0 8px 0; font-weight: 600; color: #1E293B;">Meeting Details</p>
@@ -129,7 +130,7 @@ async def send_meeting_email(
                 json={
                     "fromAddress": ZOHO_FROM_EMAIL,
                     "toAddress":   to_email,
-                    "subject":     f"Meeting Request from {exhibitor_company}",
+                    "subject": f"{'Meeting Rescheduled' if is_reschedule else 'Meeting Request'} from {exhibitor_company}",
                     "content":     html_body,
                     "mailFormat":  "html",
                 }
@@ -618,6 +619,7 @@ async def reschedule_meeting(
                 "notes":             payload.notes,
             },
             exhibitor_company=event.get("company", "The exhibitor"),
+            is_reschedule=True,
         )
 
     return {"ok": True, "status": "pending", "email_sent": email_sent}
