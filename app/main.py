@@ -16,6 +16,7 @@ app.add_middleware(
     allow_origins=[
         "https://fingoh-exhibitor.vercel.app",
         "https://fingoh-staff.vercel.app",
+        "https://fingoh-admin.vercel.app",
         "https://fingoh-staff-my7l3j4er-fingoh.vercel.app",
         "http://localhost:5173",
         "http://localhost:4173",
