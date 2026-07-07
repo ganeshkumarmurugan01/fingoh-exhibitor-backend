@@ -347,7 +347,7 @@ def _build_zoho_lead(contact: dict, event: dict) -> dict:
         "Industry":     contact.get("industry") or "",
         "Lead_Source":  f"Exhibition — {event_name}",
         "Description":  description,
-        "Tag":          [{"name": "fingoh-lead"}, {"name": event_name}],
+
     }
 
 
@@ -424,6 +424,7 @@ async def push_leads_to_zoho(
                 headers=headers,
                 json={"data": batch, "trigger": ["workflow"]},
             )
+        print(f"[CRM PUSH] Zoho response: {r.status_code} {r.text[:500]}")
         if r.status_code in (200, 201):
             result = r.json()
             pushed += len([d for d in result.get("data", []) if d.get("code") in ("SUCCESS", "DUPLICATE_DATA")])
