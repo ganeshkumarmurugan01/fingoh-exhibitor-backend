@@ -20,7 +20,7 @@ ZOHOCRM_REDIRECT_URI  = os.getenv(
 )
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://fingoh-exhibitor.vercel.app")
 
-ZOHOCRM_SCOPES = "ZohoCRM.modules.contacts.READ,ZohoCRM.modules.leads.READ"
+ZOHOCRM_SCOPES = "ZohoCRM.modules.contacts.ALL,ZohoCRM.modules.leads.ALL"
 
 
 async def _get_crm_access_token(refresh_token: str) -> str:
