@@ -69,7 +69,7 @@ async def list_customers(
         return []
 
     # Batch fetch all profiles and events in 2 queries
-    all_profiles = db.table("profiles").select("id,name,role,org_id").in_("org_id", org_ids).execute()
+    all_profiles = db.table("profiles").select("id,name,role,org_id").in_("org_id", org_ids).neq("role", "super_admin").execute()
     all_events   = db.table("events").select("id,org_id").in_("org_id", org_ids).execute()
 
     # Group by org_id
@@ -109,7 +109,7 @@ async def get_customer(
     if not org.data:
         raise HTTPException(404, "Organisation not found")
 
-    users  = db.table("profiles").select("*").eq("org_id", org_id).execute()
+    users  = db.table("profiles").select("*").eq("org_id", org_id).neq("role", "super_admin").execute()
     events = db.table("events").select("id,name,date_from,date_to,created_at").eq("org_id", org_id).execute()
 
     return {
