@@ -299,7 +299,7 @@ async def admin_stats(
     db = get_db()
 
     orgs     = db.table("organisations").select("id,status,plan").neq("slug", "fingoh-admin").execute()
-    profiles = db.table("profiles").select("id", count="exact").neq("role", "super_admin").execute()
+    profiles = db.table("profiles").select("id", count="exact").neq("is_super_admin", True).execute()
     events   = db.table("events").select("id", count="exact").execute()
     contacts = db.table("audience_contacts").select("id", count="exact").execute()
 
