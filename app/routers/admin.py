@@ -172,13 +172,22 @@ async def create_customer(
         "title":  "Account Admin",
     }).execute()
 
+    # Send welcome email
+    email_sent = await _send_welcome_email(
+        to_email=payload.admin_email,
+        to_name=payload.admin_name,
+        company=payload.company_name,
+        password=password,
+    )
+
     return {
-        "ok":       True,
-        "org_id":   org_id,
-        "user_id":  user_id,
-        "email":    payload.admin_email,
-        "password": password,  # shown once — admin must note it down
-        "message":  f"Customer '{payload.company_name}' created successfully",
+        "ok":         True,
+        "org_id":     org_id,
+        "user_id":    user_id,
+        "email":      payload.admin_email,
+        "password":   password,
+        "email_sent": email_sent,
+        "message":    f"Customer '{payload.company_name}' created successfully",
     }
 
 
@@ -245,6 +254,22 @@ async def reset_customer_password(
 
     if r.status_code not in (200, 201):
         raise HTTPException(500, f"Failed to reset password: {r.text[:200]}")
+
+    # Get user email to send reset notification
+    try:
+        async with httpx.AsyncClient() as client:
+            ur = await client.get(
+                f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+                headers={"apikey": settings.supabase_service_key, "Authorization": f"Bearer {settings.supabase_service_key}"},
+            )
+        user_email = ur.json().get("email", "")
+        user_name  = profile.data.get("name", "Admin") if profile.data else "Admin"
+        org = db.table("organisations").select("name").eq("id", org_id).single().execute()
+        company = org.data.get("name", "") if org.data else ""
+        if user_email:
+            await _send_welcome_email(user_email, user_name, company, new_password)
+    except Exception as e:
+        print(f"[admin] Reset email failed: {e}")
 
     return {"ok": True, "new_password": new_password}
 
@@ -369,3 +394,63 @@ async def list_org_users(
         result.append({**p, "email": email})
 
     return result
+
+
+# ── Helper: send welcome email with credentials ───────────────────────────────
+
+async def _send_welcome_email(to_email: str, to_name: str, company: str, password: str) -> bool:
+    """Send login credentials to new customer via Zoho Mail."""
+    import os, httpx
+    from app.routers.meetings import get_zoho_access_token
+
+    ZOHO_ACCOUNT_ID = os.getenv("ZOHO_ACCOUNT_ID", "670863000000008002")
+    ZOHO_FROM_EMAIL = os.getenv("ZOHO_FROM_EMAIL", "noreply@fingoh.ai")
+    ZOHO_FROM_NAME  = os.getenv("ZOHO_FROM_NAME", "Fingoh")
+    FRONTEND_URL    = os.getenv("FRONTEND_URL", "https://fingoh-exhibitor.vercel.app")
+
+    html_body = f"""
+    <div style="font-family: -apple-system, sans-serif; max-width: 560px; margin: 0 auto; background: #ffffff;">
+      <div style="background: #0D1B3E; padding: 28px 32px; border-radius: 12px 12px 0 0;">
+        <h1 style="color: white; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.04em;">Fingoh</h1>
+        <p style="color: rgba(255,255,255,0.6); margin: 4px 0 0 0; font-size: 13px;">Exhibitor Intelligence Platform</p>
+      </div>
+      <div style="padding: 32px; background: #ffffff; border: 1px solid #E2E8F0; border-top: none; border-radius: 0 0 12px 12px;">
+        <p style="font-size: 16px; color: #1E293B; margin: 0 0 8px 0;">Hi {to_name},</p>
+        <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 24px 0;">
+          Your Fingoh account for <strong>{company}</strong> has been set up. You can now log in and start managing your exhibition intelligence.
+        </p>
+        <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 20px 24px; margin-bottom: 24px;">
+          <p style="font-size: 12px; font-weight: 600; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 12px 0;">Your Login Credentials</p>
+          <p style="font-size: 13px; color: #1E293B; margin: 6px 0;"><strong>Email:</strong> {to_email}</p>
+          <p style="font-size: 13px; color: #1E293B; margin: 6px 0;"><strong>Password:</strong> <code style="background: #E2E8F0; padding: 2px 8px; border-radius: 4px; font-size: 13px;">{password}</code></p>
+          <p style="font-size: 11px; color: #DC2626; margin: 12px 0 0 0; font-weight: 600;">Please change your password after first login.</p>
+        </div>
+        <a href="{FRONTEND_URL}" style="display: inline-block; background: #0D1B3E; color: #ffffff; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-size: 13px; font-weight: 700;">
+          Login to Fingoh
+        </a>
+        <p style="font-size: 12px; color: #94A3B8; margin: 24px 0 0 0; line-height: 1.6;">
+          If you have any questions, reply to this email or contact your Fingoh account manager.
+        </p>
+      </div>
+    </div>
+    """
+
+    try:
+        access_token = await get_zoho_access_token()
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                f"https://mail.zoho.com/api/accounts/{ZOHO_ACCOUNT_ID}/messages",
+                headers={"Authorization": f"Zoho-oauthtoken {access_token}"},
+                json={
+                    "fromAddress": ZOHO_FROM_EMAIL,
+                    "fromName":    ZOHO_FROM_NAME,
+                    "toAddress":   to_email,
+                    "subject":     f"Welcome to Fingoh — Your account is ready",
+                    "content":     html_body,
+                    "mailFormat":  "html",
+                },
+            )
+        return r.status_code == 200
+    except Exception as e:
+        print(f"[admin] Welcome email failed: {e}")
+        return False
