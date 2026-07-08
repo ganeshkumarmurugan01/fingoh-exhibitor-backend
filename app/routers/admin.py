@@ -450,6 +450,7 @@ async def _send_welcome_email(to_email: str, to_name: str, company: str, passwor
                     "mailFormat":  "html",
                 },
             )
+        print(f"[admin] Email response: {r.status_code} {r.text[:300]}")
         return r.status_code == 200
     except Exception as e:
         import traceback
