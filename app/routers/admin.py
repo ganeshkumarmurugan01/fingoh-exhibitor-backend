@@ -443,9 +443,8 @@ async def _send_welcome_email(to_email: str, to_name: str, company: str, passwor
                 headers={"Authorization": f"Zoho-oauthtoken {access_token}"},
                 json={
                     "fromAddress": ZOHO_FROM_EMAIL,
-                    "fromName":    ZOHO_FROM_NAME,
                     "toAddress":   to_email,
-                    "subject":     f"Welcome to Fingoh — Your account is ready",
+                    "subject":     "Welcome to Fingoh - Your account is ready",
                     "content":     html_body,
                     "mailFormat":  "html",
                 },
