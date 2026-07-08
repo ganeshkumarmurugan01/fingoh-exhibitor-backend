@@ -299,17 +299,17 @@ async def admin_stats(
     db = get_db()
 
     orgs     = db.table("organisations").select("id,status,plan").neq("slug", "fingoh-admin").execute()
-    profiles = db.table("profiles").select("id").neq("role", "super_admin").execute()
-    events   = db.table("events").select("id").execute()
-    contacts = db.table("audience_contacts").select("id").execute()
+    profiles = db.table("profiles").select("id", count="exact").neq("role", "super_admin").execute()
+    events   = db.table("events").select("id", count="exact").execute()
+    contacts = db.table("audience_contacts").select("id", count="exact").execute()
 
     orgs_data = orgs.data or []
     return {
         "total_customers":  len(orgs_data),
         "active_customers": sum(1 for o in orgs_data if o.get("status") == "active"),
-        "total_users":      len(profiles.data or []),
-        "total_events":     len(events.data or []),
-        "total_contacts":   len(contacts.data or []),
+        "total_users":      profiles.count or 0,
+        "total_events":     events.count or 0,
+        "total_contacts":   contacts.count or 0,
         "plans": {
             "trial":      sum(1 for o in orgs_data if o.get("plan") == "trial"),
             "starter":    sum(1 for o in orgs_data if o.get("plan") == "starter"),
