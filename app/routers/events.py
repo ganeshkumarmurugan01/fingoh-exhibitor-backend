@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from app.auth import get_current_user
+from app.auth import get_current_user, get_user_org
 from app.database import get_db
 from app.models.event import (
     EventCreate,
