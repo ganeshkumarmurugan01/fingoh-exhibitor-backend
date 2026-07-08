@@ -64,17 +64,33 @@ async def list_customers(
         .order("created_at", desc=True)\
         .execute()
 
+    org_ids = [o["id"] for o in (orgs.data or [])]
+    if not org_ids:
+        return []
+
+    # Batch fetch all profiles and events in 2 queries
+    all_profiles = db.table("profiles").select("id,name,role,org_id").in_("org_id", org_ids).execute()
+    all_events   = db.table("events").select("id,org_id").in_("org_id", org_ids).execute()
+
+    # Group by org_id
+    profiles_by_org = {}
+    for p in (all_profiles.data or []):
+        profiles_by_org.setdefault(p["org_id"], []).append(p)
+
+    events_by_org = {}
+    for e in (all_events.data or []):
+        events_by_org.setdefault(e["org_id"], []).append(e)
+
     result = []
     for org in (orgs.data or []):
-        # Get user count
-        users = db.table("profiles").select("id,name,role").eq("org_id", org["id"]).execute()
-        # Get event count
-        events = db.table("events").select("id").eq("org_id", org["id"]).execute()
+        oid = org["id"]
+        users  = profiles_by_org.get(oid, [])
+        events = events_by_org.get(oid, [])
         result.append({
             **org,
-            "user_count":  len(users.data or []),
-            "event_count": len(events.data or []),
-            "users":       users.data or [],
+            "user_count":  len(users),
+            "event_count": len(events),
+            "users":       users,
         })
 
     return result
