@@ -276,3 +276,96 @@ async def admin_stats(
             "enterprise": sum(1 for o in orgs_data if o.get("plan") == "enterprise"),
         }
     }
+
+
+class AddUserPayload(BaseModel):
+    name: str
+    email: str
+    role: str = "user"
+    title: Optional[str] = None
+
+
+@router.post("/customers/{org_id}/users")
+async def add_user_to_org(
+    org_id: str,
+    payload: AddUserPayload,
+    current_user: dict = Depends(require_super_admin),
+):
+    """Add a new user to an existing organisation."""
+    db = get_db()
+    import httpx
+    from app.config import get_settings
+    settings = get_settings()
+
+    # Verify org exists
+    org = db.table("organisations").select("id,name").eq("id", org_id).single().execute()
+    if not org.data:
+        raise HTTPException(404, "Organisation not found")
+
+    password = _generate_password()
+
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{settings.supabase_url}/auth/v1/admin/users",
+            headers={
+                "apikey":        settings.supabase_service_key,
+                "Authorization": f"Bearer {settings.supabase_service_key}",
+                "Content-Type":  "application/json",
+            },
+            json={
+                "email":         payload.email,
+                "password":      password,
+                "email_confirm": True,
+                "user_metadata": {"name": payload.name, "org_id": org_id},
+            },
+        )
+
+    if r.status_code not in (200, 201):
+        raise HTTPException(500, f"Failed to create user: {r.text[:200]}")
+
+    user_id = r.json()["id"]
+
+    db.table("profiles").upsert({
+        "id":     user_id,
+        "org_id": org_id,
+        "name":   payload.name,
+        "role":   payload.role,
+        "title":  payload.title or "",
+    }).execute()
+
+    return {
+        "ok":       True,
+        "user_id":  user_id,
+        "email":    payload.email,
+        "password": password,
+    }
+
+
+@router.get("/customers/{org_id}/users")
+async def list_org_users(
+    org_id: str,
+    current_user: dict = Depends(require_super_admin),
+):
+    """List all users for an organisation with their auth emails."""
+    db = get_db()
+    import httpx
+    from app.config import get_settings
+    settings = get_settings()
+
+    profiles = db.table("profiles").select("*").eq("org_id", org_id).execute()
+
+    # Get emails from Supabase auth
+    result = []
+    for p in (profiles.data or []):
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{settings.supabase_url}/auth/v1/admin/users/{p['id']}",
+                headers={
+                    "apikey":        settings.supabase_service_key,
+                    "Authorization": f"Bearer {settings.supabase_service_key}",
+                },
+            )
+        email = r.json().get("email", "—") if r.status_code == 200 else "—"
+        result.append({**p, "email": email})
+
+    return result
