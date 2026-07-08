@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import get_current_user, get_user_org
+from app.routers.utils import log_activity
 from app.database import get_db
 from app.models.event import (
     EventCreate,
@@ -61,6 +62,10 @@ def create_event(
         raise HTTPException(status_code=500, detail="Failed to create event")
     event = event_result.data[0]
     event_id = event["id"]
+    try:
+        log_activity(db, org_id, "event_created", f"Created event: {payload.name}", current_user["user_id"], {"event_name": payload.name, "event_id": event_id})
+    except Exception as e:
+        print(f"[events] Activity log failed: {e}")
 
     if payload.categories:
         cats = [{"event_id": event_id, "category": c} for c in payload.categories]
