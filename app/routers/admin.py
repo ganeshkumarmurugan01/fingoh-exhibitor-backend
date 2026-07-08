@@ -129,7 +129,7 @@ async def create_customer(
         "subscription_plan":       payload.plan,
         "max_events":              payload.max_events,
         "admin_notes":             payload.admin_notes,
-        "subscription_expires_at": payload.subscription_expires_at,
+        "subscription_expires_at": payload.subscription_expires_at or None,
         "created_by_admin":        True,
         "created_at":              datetime.now(timezone.utc).isoformat(),
     }).execute()
