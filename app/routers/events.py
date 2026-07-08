@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
-from app.auth import get_current_user, get_user_org
+from app.auth import get_current_user
+from app.routers.utils import log_activity
 from app.database import get_db
 from app.models.event import (
     EventCreate,
@@ -57,6 +58,8 @@ def create_event(
         "booth_size": payload.booth_size,
     }
     event_result = db.table("events").insert(event_row).execute()
+    if event_result.data:
+        log_activity(db, org_id, "event_created", f"Created event: {payload.name}", current_user["user_id"], {"event_name": payload.name})
     if not event_result.data:
         raise HTTPException(status_code=500, detail="Failed to create event")
     event = event_result.data[0]

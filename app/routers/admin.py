@@ -543,3 +543,23 @@ async def delete_customer(
     db.table("organisations").delete().eq("id", org_id).execute()
 
     return {"ok": True, "deleted": org_id}
+
+
+from app.routers.utils import log_activity
+
+
+@router.get("/customers/{org_id}/activity")
+async def get_customer_activity(
+    org_id: str,
+    limit: int = 50,
+    current_user: dict = Depends(require_super_admin),
+):
+    """Get activity log for a customer."""
+    db = get_db()
+    result = db.table("activity_logs")\
+        .select("*")\
+        .eq("org_id", org_id)\
+        .order("created_at", desc=True)\
+        .limit(limit)\
+        .execute()
+    return result.data or []

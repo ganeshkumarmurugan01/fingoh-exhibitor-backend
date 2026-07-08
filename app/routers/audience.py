@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 import csv, io, httpx, os, json, asyncio
 from app.database import get_db
 from app.auth import get_current_user
+from app.routers.admin import log_activity
 
 router = APIRouter(prefix="/audience", tags=["audience"])
 
@@ -187,6 +188,7 @@ async def upload_audience(
         records, on_conflict="event_id,email"
     ).execute()
 
+    log_activity(get_db(), get_user_org(current_user["user_id"], get_db()), "contacts_uploaded", f"Uploaded {len(records)} contacts", current_user["user_id"], {"count": len(records), "event_id": event_id})
     return {"uploaded": len(records), "event_id": event_id}
 
 
