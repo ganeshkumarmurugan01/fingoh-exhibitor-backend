@@ -456,3 +456,31 @@ async def _send_welcome_email(to_email: str, to_name: str, company: str, passwor
         print(f"[admin] Welcome email failed: {e}")
         print(traceback.format_exc())
         return False
+
+
+@router.delete("/customers/{org_id}/users/{user_id}")
+async def delete_user(
+    org_id: str,
+    user_id: str,
+    current_user: dict = Depends(require_super_admin),
+):
+    """Delete a user from an organisation."""
+    import httpx
+    from app.config import get_settings
+    settings = get_settings()
+    db = get_db()
+
+    # Delete from Supabase auth
+    async with httpx.AsyncClient() as client:
+        r = await client.delete(
+            f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+            headers={
+                "apikey":        settings.supabase_service_key,
+                "Authorization": f"Bearer {settings.supabase_service_key}",
+            },
+        )
+
+    # Delete profile regardless
+    db.table("profiles").delete().eq("id", user_id).eq("org_id", org_id).execute()
+
+    return {"ok": True}
