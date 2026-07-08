@@ -484,3 +484,46 @@ async def delete_user(
     db.table("profiles").delete().eq("id", user_id).eq("org_id", org_id).execute()
 
     return {"ok": True}
+
+
+@router.delete("/customers/{org_id}")
+async def delete_customer(
+    org_id: str,
+    current_user: dict = Depends(require_super_admin),
+):
+    """Delete a customer organisation and all associated data."""
+    import httpx
+    from app.config import get_settings
+    settings = get_settings()
+    db = get_db()
+
+    # Get all users in this org
+    profiles = db.table("profiles").select("id").eq("org_id", org_id).execute()
+
+    # Delete each user from Supabase auth
+    for p in (profiles.data or []):
+        async with httpx.AsyncClient() as client:
+            await client.delete(
+                f"{settings.supabase_url}/auth/v1/admin/users/{p['id']}",
+                headers={
+                    "apikey":        settings.supabase_service_key,
+                    "Authorization": f"Bearer {settings.supabase_service_key}",
+                },
+            )
+
+    # Delete all associated data
+    # Get all events for this org
+    events = db.table("events").select("id").eq("org_id", org_id).execute()
+    event_ids = [e["id"] for e in (events.data or [])]
+
+    for event_id in event_ids:
+        db.table("audience_contacts").delete().eq("event_id", event_id).execute()
+        db.table("meeting_requests").delete().eq("event_id", event_id).execute()
+        db.table("conversation_signals").delete().eq("event_id", event_id).execute()
+        db.table("crm_connections").delete().eq("event_id", event_id).execute()
+
+    db.table("events").delete().eq("org_id", org_id).execute()
+    db.table("profiles").delete().eq("org_id", org_id).execute()
+    db.table("organisations").delete().eq("id", org_id).execute()
+
+    return {"ok": True, "deleted": org_id}
