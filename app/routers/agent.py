@@ -5,9 +5,12 @@ Fingoh Agent — endpoint that builds a real action queue for the 3 agents:
   followup  → contacts whose meeting is completed
 """
 
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from app.database import get_db
 from app.auth import get_current_user
+
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -127,3 +130,40 @@ def get_agent_queue(
             "followup": len(followup_items[:MAX_PER_BUCKET]),
         }
     }
+
+
+# ── Generate agent output via Anthropic (server-side) ───────────────────────
+import httpx
+from pydantic import BaseModel
+
+class GenerateRequest(BaseModel):
+    prompt: str
+
+@router.post("/generate")
+async def agent_generate(
+    body: GenerateRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=500, detail="Anthropic API key not configured")
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        res = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key":         ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+            },
+            json={
+                "model":      "claude-opus-4-8",
+                "max_tokens": 600,
+                "messages":   [{"role": "user", "content": body.prompt}],
+            },
+        )
+
+    if res.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Anthropic error: {res.text[:200]}")
+
+    data = res.json()
+    return {"text": data["content"][0]["text"]}
