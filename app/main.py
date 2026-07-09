@@ -6,6 +6,7 @@ from app.routers import audience
 from app.routers import meetings
 from app.routers import crm
 from app.routers import admin
+from app.routers import agent
 
 settings = get_settings()
 
@@ -34,6 +35,8 @@ app.include_router(audience.router, prefix=API_PREFIX)
 app.include_router(meetings.router, prefix=API_PREFIX)
 app.include_router(crm.router, prefix=API_PREFIX)
 app.include_router(admin.router, prefix=API_PREFIX)
+app.include_router(agent.router, prefix=API_PREFIX)
+app.include_router(agent.router, prefix=API_PREFIX)
 
 @app.get("/health", tags=["system"])
 def health():
