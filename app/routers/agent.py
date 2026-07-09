@@ -204,6 +204,16 @@ async def agent_send(
     if not to_email:
         raise HTTPException(status_code=400, detail="Contact has no email address")
 
+    # Strip any "Name <email>" format — Zoho only accepts plain email
+    import re as _re
+    override = os.getenv("TEST_EMAIL_OVERRIDE", "")
+    if override:
+        m = _re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", override)
+        to_email = m.group(0) if m else override
+    else:
+        m = _re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", to_email)
+        to_email = m.group(0) if m else to_email
+
     # Parse subject + body from generated text
     # Outreach format: "Subject line\n\nbody..."
     # Followup format: "EMAIL 1 (Day 1) — Subject line\nthen body...---"
