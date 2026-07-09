@@ -134,6 +134,7 @@ def get_agent_queue(
 
 # ── Generate agent output via Anthropic (server-side) ───────────────────────
 import httpx
+import re
 from pydantic import BaseModel
 
 class GenerateRequest(BaseModel):
@@ -167,3 +168,102 @@ async def agent_generate(
 
     data = res.json()
     return {"text": data["content"][0]["text"]}
+
+
+
+# ── Send agent-generated email to contact ────────────────────────────────────
+class SendRequest(BaseModel):
+    event_id:       str
+    contact_id:     str
+    agent_id:       str   # "outreach" | "followup"
+    generated_text: str
+
+@router.post("/send")
+async def agent_send(
+    body: SendRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    if body.agent_id == "routing":
+        return {"status": "skipped", "reason": "Routing briefs are for staff — no email sent"}
+
+    db = get_db()
+
+    # Fetch contact email + name
+    contact_res = db.table("audience_contacts").select(
+        "id, name, email, company"
+    ).eq("id", body.contact_id).maybe_single().execute()
+
+    if not contact_res or not contact_res.data:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    contact   = contact_res.data
+    to_email  = contact.get("email") or ""
+    to_name   = contact.get("name") or "there"
+    company   = contact.get("company") or ""
+
+    if not to_email:
+        raise HTTPException(status_code=400, detail="Contact has no email address")
+
+    # Parse subject + body from generated text
+    # Outreach format: "Subject line\n\nbody..."
+    # Followup format: "EMAIL 1 (Day 1) — Subject line\nthen body...---"
+    lines = body.generated_text.strip().split("\n")
+
+    if body.agent_id == "outreach":
+        subject = lines[0].strip()
+        email_body = "\n".join(lines[2:]).strip() if len(lines) > 2 else body.generated_text
+
+    elif body.agent_id == "followup":
+        # Extract just EMAIL 1 section (up to first ---)
+        text = body.generated_text
+        # Find subject after "EMAIL 1 (Day 1) —"
+        import re
+        day1_match = re.search(r"EMAIL 1 \(Day 1\)[^\n]*\n(.*?)(?=---|LINKEDIN|$)", text, re.DOTALL)
+        if day1_match:
+            day1_text  = day1_match.group(1).strip()
+            day1_lines = day1_text.split("\n")
+            subject    = day1_lines[0].strip()
+            email_body = "\n".join(day1_lines[1:]).strip()
+        else:
+            subject    = f"Following up from the event — {company}"
+            email_body = body.generated_text
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown agent_id: {body.agent_id}")
+
+    # Send via Zoho Mail
+    from app.routers.meetings import get_zoho_access_token
+    ZOHO_ACCOUNT_ID = os.getenv("ZOHO_ACCOUNT_ID", "670863000000008002")
+    ZOHO_FROM_EMAIL = os.getenv("ZOHO_FROM_EMAIL", "noreply@fingoh.ai")
+    ZOHO_FROM_NAME  = os.getenv("ZOHO_FROM_NAME", "Fingoh")
+
+    html_body = email_body.replace("\n", "<br>")
+
+    try:
+        access_token = await get_zoho_access_token()
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"https://mail.zoho.com/api/accounts/{ZOHO_ACCOUNT_ID}/messages",
+                headers={
+                    "Authorization": f"Zoho-oauthtoken {access_token}",
+                    "Content-Type":  "application/json",
+                },
+                json={
+                    "fromAddress": ZOHO_FROM_EMAIL,
+                    "toAddress":   to_email,
+                    "subject":     subject,
+                    "content":     html_body,
+                },
+            )
+        print(f"[agent/send] Zoho response: {r.status_code} {r.text[:200]}")
+        if r.status_code not in (200, 201):
+            raise HTTPException(status_code=502, detail=f"Zoho error: {r.text[:200]}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Email send failed: {str(e)}")
+
+    return {
+        "status":  "sent",
+        "to":      to_email,
+        "subject": subject,
+    }
