@@ -439,13 +439,13 @@ async def upload_audience(
 
     # ── Apply historical boost from previous edition ───────────────────────
     # Fetch previous_event_id for this event
-    ev_res = db.table("events").select("previous_event_id").eq("id", event_id).maybe_single().execute()
+    ev_res = supabase.table("events").select("previous_event_id").eq("id", event_id).maybe_single().execute()
     previous_event_id = (ev_res.data.get("previous_event_id") if ev_res and ev_res.data else None)
 
     if previous_event_id:
         for i, (row, score) in enumerate(zip(enriched_rows, scored)):
             email   = row.get("email") or ""
-            history = get_historical_boost(db, email, previous_event_id)
+            history = get_historical_boost(supabase, email, previous_event_id)
             if history["boost"] != 0.0:
                 old_iei = float(score.get("ieiScore", 43))
                 new_iei = round(min(100.0, max(0.0, old_iei + history["boost"])), 2)
