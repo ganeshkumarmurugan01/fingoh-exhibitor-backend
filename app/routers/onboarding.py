@@ -11,7 +11,7 @@ from app.models.organisation import (
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
 
-@router.get("/me", response_model=ProfileResponse)
+@router.get("/me")
 def get_my_profile(current_user: dict = Depends(get_current_user)):
     db = get_db()
     result = (
@@ -22,7 +22,16 @@ def get_my_profile(current_user: dict = Depends(get_current_user)):
     )
     if not result.data:
         raise HTTPException(status_code=404, detail="Profile not found")
-    return result.data[0]
+    profile = result.data[0]
+
+    # Fetch org name
+    org_name = None
+    if profile.get("org_id"):
+        org_res = db.table("organisations").select("name").eq("id", profile["org_id"]).maybe_single().execute()
+        if org_res and org_res.data:
+            org_name = org_res.data.get("name")
+
+    return {**profile, "org_name": org_name}
 
 
 @router.post("/organisation", response_model=OrganisationResponse, status_code=201)
