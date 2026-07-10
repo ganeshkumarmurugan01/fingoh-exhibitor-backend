@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 import csv, io, httpx, os, json, asyncio
 from app.database import get_db
-from app.auth import get_current_user
+from app.auth import get_current_user, get_user_org
 from app.routers.utils import log_activity
 
 router = APIRouter(prefix="/audience", tags=["audience"])
