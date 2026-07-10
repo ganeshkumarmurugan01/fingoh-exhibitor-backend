@@ -127,6 +127,95 @@ async def _score_batch(rows: list[dict]) -> list[dict]:
         return resp.json()["scores"]
 
 
+# ── Historical boost from previous edition ────────────────────────────────────
+def get_historical_boost(db, email: str, previous_event_id: str) -> dict:
+    """
+    Look up a visitor's behaviour from the previous edition by email.
+    Returns a boost dict with score delta and signals found.
+    Returns {"boost": 0.0, "signals": []} if no history found.
+
+    Boost logic:
+      - Visited booth last year (badge scan / conversation logged) : +15 pts
+      - Conversation quality score > 0.6                          : +10 pts
+      - Asked pricing/technical questions                         : +10 pts
+      - Requested proposal last year                              : +20 pts
+      - Completed meeting last year                               : +15 pts
+      - Multiple editions attended (per edition beyond first)     : + 5 pts
+      - No-show last year                                         : -10 pts
+      - Cap: +35 pts max, -10 pts min
+    """
+    if not email or not previous_event_id:
+        return {"boost": 0.0, "signals": [], "returning": False}
+
+    boost    = 0.0
+    signals  = []
+
+    try:
+        # Find contact in previous event by email
+        prev_contact_res = db.table("audience_contacts").select(
+            "id, name, onsite_iei_score, onsite_signals"
+        ).eq("event_id", previous_event_id).eq("email", email).maybe_single().execute()
+
+        if not prev_contact_res or not prev_contact_res.data:
+            return {"boost": 0.0, "signals": [], "returning": False}
+
+        prev = prev_contact_res.data
+        prev_id = prev["id"]
+        signals.append("returning_visitor")
+        boost += 15.0   # Base bonus for returning
+
+        # Check onsite signals from previous edition
+        prev_signals = prev.get("onsite_signals") or {}
+
+        conv_quality = float(prev_signals.get("conv_quality_score") or 0)
+        if conv_quality > 0.6:
+            boost += 10.0
+            signals.append("prev_high_conv_quality")
+
+        q_type = prev_signals.get("questions_type", [])
+        if isinstance(q_type, list) and any(q in q_type for q in ["pricing", "implementation", "technical"]):
+            boost += 10.0
+            signals.append("prev_buying_questions")
+
+        if prev_signals.get("proposal_demo_request"):
+            boost += 20.0
+            signals.append("prev_proposal_request")
+
+        # Check completed meetings in previous edition
+        mtg_res = db.table("meeting_requests").select("id, status").eq(
+            "event_id", previous_event_id
+        ).eq("contact_id", prev_id).execute()
+        meetings = mtg_res.data or []
+
+        completed = [m for m in meetings if m.get("status") == "completed"]
+        no_shows  = [m for m in meetings if m.get("status") == "no_show"]
+
+        if completed:
+            boost += 15.0
+            signals.append("prev_meeting_completed")
+        if no_shows and not completed:
+            boost -= 10.0
+            signals.append("prev_no_show")
+
+        # Check conversation signals from previous edition
+        conv_res = db.table("conversation_signals").select("id").eq(
+            "event_id", previous_event_id
+        ).eq("contact_id", prev_id).execute()
+        if conv_res.data:
+            signals.append("prev_booth_visit")
+
+    except Exception as e:
+        print(f"[historical_boost] error for {email}: {e}")
+        return {"boost": 0.0, "signals": [], "returning": False}
+
+    final_boost = float(max(-10.0, min(boost, 35.0)))
+    return {
+        "boost":     final_boost,
+        "signals":   signals,
+        "returning": True,
+    }
+
+
 
 
 # ── Rescore all contacts for an event ─────────────────────────────────────────
@@ -182,6 +271,7 @@ async def rescore_all(
             "iei_score":  iei,
             "reg_prob":   reg,
             "iei_tier":   tier,
+            "historical_signals": score.get("historical", {}).get("signals") or None,
         }).eq("id", contact["id"]).execute()
         updated += 1
 
@@ -240,6 +330,21 @@ async def upload_audience(
 
     # Score with XGBoost via Modal
     scored = await _score_batch(enriched_rows)
+
+    # ── Apply historical boost from previous edition ───────────────────────
+    # Fetch previous_event_id for this event
+    ev_res = db.table("events").select("previous_event_id").eq("id", event_id).maybe_single().execute()
+    previous_event_id = (ev_res.data.get("previous_event_id") if ev_res and ev_res.data else None)
+
+    if previous_event_id:
+        for i, (row, score) in enumerate(zip(enriched_rows, scored)):
+            email   = row.get("email") or ""
+            history = get_historical_boost(db, email, previous_event_id)
+            if history["boost"] != 0.0:
+                old_iei = float(score.get("ieiScore", 43))
+                new_iei = round(min(100.0, max(0.0, old_iei + history["boost"])), 2)
+                scored[i] = {**score, "ieiScore": new_iei, "historical": history}
+                print(f"[historical] {email}: {old_iei:.1f} → {new_iei:.1f} (+{history['boost']:.1f}) signals={history['signals']}")
 
     records = [
         {
