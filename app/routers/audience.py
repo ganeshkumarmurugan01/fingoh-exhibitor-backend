@@ -405,18 +405,35 @@ async def rescore_public(event_id: str):
     db = get_db()
     event_ctx = _get_event_context(db, event_id)
     contacts = db.table("audience_contacts").select(
-        "id,designation,company_size,raw_data"
+        "id,designation,company,company_size,industry,raw_data"
     ).eq("event_id", event_id).execute().data or []
     if not contacts:
         return {"rescored": 0}
-    rows = [{
-        "id":           c["id"],
-        "job_title":    c.get("designation") or "",
-        "designation":  c.get("designation") or "",
-        "icp_fit_score": compute_icp_fit(c.get("designation") or "", c.get("company_size") or "", event_ctx),
-        "company_size_match": 0.5,
-        "profile_completeness": 0.5,
-    } for c in contacts]
+
+    def safe(v, default=0.0):
+        try: return float(v) if v is not None else default
+        except: return default
+
+    rows = []
+    for c in contacts:
+        raw = c.get("raw_data") or {}
+        icp = compute_icp_fit(c.get("designation") or "", c.get("company_size") or "", event_ctx)
+        rows.append({
+            "id":                       c["id"],
+            "job_title":                c.get("designation") or "",
+            "designation":              c.get("designation") or "",
+            "company":                  c.get("company") or "",
+            "icp_fit_score":            icp,
+            "company_size_match":       safe(raw.get("company_size_match"), 0.5),
+            "buying_cycle_stage":       safe(raw.get("buying_cycle_stage"), 0.0),
+            "trigger_event_score":      safe(raw.get("trigger_event_score"), 0.0),
+            "competitive_displacement": safe(raw.get("competitive_displacement"), 0.0),
+            "seniority_score":          safe(raw.get("seniority_score"), 0.0),
+            "tech_stack_compatibility": safe(raw.get("tech_stack_compatibility"), 0.0),
+            "previous_event_history":   safe(raw.get("previous_event_history"), 0.0),
+            "profile_completeness":     safe(raw.get("profile_completeness"), 0.5),
+            "categories_specificity":   safe(raw.get("categories_specificity"), 0.0),
+        })
     all_scores = []
     for i in range(0, len(rows), 20):
         batch_scores = await _score_batch(rows[i:i+20])
