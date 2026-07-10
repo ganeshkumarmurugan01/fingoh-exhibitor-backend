@@ -127,6 +127,79 @@ async def _score_batch(rows: list[dict]) -> list[dict]:
         return resp.json()["scores"]
 
 
+
+
+# ── Rescore all contacts for an event ─────────────────────────────────────────
+@router.post("/rescore/{event_id}")
+async def rescore_all(
+    event_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Rescore all contacts in an event with the latest Modal model."""
+    db = get_db()
+
+    # Fetch all contacts
+    res = db.table("audience_contacts").select("*").eq("event_id", event_id).execute()
+    contacts = res.data or []
+    if not contacts:
+        return {"rescored": 0, "message": "No contacts found"}
+
+    # Build visitor payloads
+    rows = []
+    for c in contacts:
+        rows.append({
+            "id":                    c.get("id"),
+            "name":                  c.get("name"),
+            "designation":           c.get("designation"),
+            "job_title":             c.get("designation"),
+            "company":               c.get("company"),
+            "industry":              c.get("industry"),
+            "icp_fit_score":         float(c.get("icp_fit_score") or 0.5),
+            "company_size_match":    float(c.get("company_size_match") or 0.5),
+            "buying_cycle_stage":    float(c.get("buying_cycle_stage") or 0.0),
+            "trigger_event_score":   float(c.get("trigger_event_score") or 0.0),
+            "competitive_displacement": float(c.get("competitive_displacement") or 0.0),
+            "seniority_score":       float(c.get("seniority_score") or 0.0),
+            "tech_stack_compatibility": float(c.get("tech_stack_compatibility") or 0.0),
+            "previous_event_history":float(c.get("previous_event_history") or 0.0),
+            "profile_completeness":  float(c.get("profile_completeness") or 0.5),
+            "categories_specificity":float(c.get("categories_specificity") or 0.0),
+        })
+
+    # Score in batches of 20
+    BATCH = 20
+    scores = []
+    for i in range(0, len(rows), BATCH):
+        batch_scores = await _score_batch(rows[i:i+BATCH])
+        scores.extend(batch_scores)
+
+    # Update each contact
+    updated = 0
+    for contact, score in zip(contacts, scores):
+        iei   = float(score.get("ieiScore", 50))
+        reg   = float(score.get("regProb",  0.5))
+        tier  = score.get("ieiTier", "T2")
+        db.table("audience_contacts").update({
+            "iei_score":  iei,
+            "reg_prob":   reg,
+            "iei_tier":   tier,
+        }).eq("id", contact["id"]).execute()
+        updated += 1
+
+    # Tier distribution summary
+    tier_counts = {}
+    for s in scores:
+        t = s.get("ieiTier", "T2")
+        tier_counts[t] = tier_counts.get(t, 0) + 1
+
+    return {
+        "rescored":   updated,
+        "event_id":   event_id,
+        "tier_distribution": tier_counts,
+        "message":    f"✓ Rescored {updated} contacts with v6 model",
+    }
+
+
 # ── Upload endpoint ───────────────────────────────────────────────────────────
 @router.post("/upload/{event_id}")
 async def upload_audience(
