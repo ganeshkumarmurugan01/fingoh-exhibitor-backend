@@ -16,9 +16,97 @@ def _get_event_context(supabase, event_id: str) -> dict:
     if not ev or not ev.data:
         return {}
     cats = supabase.table("event_categories").select("category").eq("event_id", event_id).execute()
+    icp  = supabase.table("event_icp").select("*").eq("event_id", event_id).maybe_single().execute()
     context = ev.data.copy()
     context["categories"] = [c["category"] for c in (cats.data or [])]
+    if icp and icp.data:
+        context["roles"]         = icp.data.get("roles") or []
+        context["company_sizes"] = icp.data.get("company_sizes") or []
+        context["visit_reasons"] = icp.data.get("visit_reasons") or []
+    else:
+        context["roles"]         = []
+        context["company_sizes"] = []
+        context["visit_reasons"] = []
     return context
+
+
+def compute_icp_fit(designation: str, company_size: str, event_ctx: dict) -> float:
+    """
+    Compute icp_fit_score (0-1) by matching contact designation and company
+    size against the event's saved ICP targets.
+
+    Matching logic:
+    - Role match:         +0.5 (partial keyword match) to +0.6 (strong match)
+    - Company size match: +0.3 (match) or +0.1 (no target set)
+    - Neutral baseline:    0.3 if no ICP targets defined
+    """
+    icp_roles   = event_ctx.get("roles") or []
+    icp_sizes   = event_ctx.get("company_sizes") or []
+
+    if not icp_roles and not icp_sizes:
+        return 0.5  # No ICP defined — neutral score
+
+    title = (designation or "").lower()
+    score = 0.0
+
+    # ── Role matching ─────────────────────────────────────────────────────
+    ROLE_KEYWORDS = {
+        "C-Suite / CEO / MD":        ["ceo","cto","cfo","coo","chief","president","managing director","md"],
+        "VP / Director":             ["vp","vice president","svp","evp","director","head of"],
+        "Procurement Manager":       ["procurement","purchasing","supply chain","sourcing","buyer"],
+        "Clinical / Technical Lead": ["clinical","technical","engineer","technology","r&d","research"],
+        "IT Manager":                ["it manager","it director","information technology","systems","cio","ciso"],
+        "Department Head":           ["head","department","division","general manager"],
+        "Business Owner":            ["owner","founder","co-founder","proprietor","partner","entrepreneur"],
+        "Consultant / Advisor":      ["consultant","advisor","adviser","analyst","specialist"],
+    }
+
+    role_score = 0.0
+    if icp_roles:
+        for icp_role in icp_roles:
+            keywords = ROLE_KEYWORDS.get(icp_role, [icp_role.lower()])
+            for kw in keywords:
+                if kw in title:
+                    role_score = max(role_score, 0.9)
+                    break
+            if role_score == 0.0:
+                # Partial match — any word overlap
+                icp_words = icp_role.lower().split()
+                title_words = title.split()
+                if any(w in title_words for w in icp_words if len(w) > 3):
+                    role_score = max(role_score, 0.5)
+
+        if role_score == 0.0:
+            role_score = 0.1  # No role match at all
+        score += role_score * 0.65  # Role is 65% of ICP fit
+
+    # ── Company size matching ─────────────────────────────────────────────
+    size_score = 0.5  # Default if no size info
+    if icp_sizes and company_size:
+        cs = (company_size or "").lower()
+        for icp_size in icp_sizes:
+            icp_s = icp_size.lower()
+            if icp_s in cs or cs in icp_s:
+                size_score = 0.9
+                break
+            # Handle numeric ranges
+            if "1000+" in icp_size and any(x in cs for x in ["1000","large","enterprise","mnc"]):
+                size_score = 0.9; break
+            if "501" in icp_size and any(x in cs for x in ["500","501","600","700","800","900"]):
+                size_score = 0.85; break
+            if "201" in icp_size and any(x in cs for x in ["200","201","250","300","400"]):
+                size_score = 0.8; break
+            if "51" in icp_size and any(x in cs for x in ["50","51","75","100","150"]):
+                size_score = 0.7; break
+        if size_score == 0.5 and icp_sizes:
+            size_score = 0.2  # Size not in target
+
+    if icp_sizes:
+        score += size_score * 0.35  # Size is 35% of ICP fit
+    else:
+        score = role_score  # Only role matters
+
+    return round(float(min(1.0, max(0.0, score))), 3)
 
 
 def _parse_meeting_interest(val):
@@ -47,7 +135,15 @@ async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncCli
     ex_company   = event_ctx.get("company") or ""
     ex_product   = event_ctx.get("product") or ""
     ex_cats      = ", ".join(event_ctx.get("categories") or [])
-    ex_icp_roles = ", ".join(event_ctx.get("roles") or [])
+    ex_icp_roles   = ", ".join(event_ctx.get("roles") or [])
+    ex_icp_sizes   = ", ".join(event_ctx.get("company_sizes") or [])
+    ex_icp_reasons = ", ".join(event_ctx.get("visit_reasons") or [])
+    # Pre-compute structural ICP fit to anchor Claude's estimate
+    structural_icp = compute_icp_fit(
+        visitor.get("designation") or visitor.get("job_title") or visitor.get("title") or "",
+        visitor.get("company_size") or "",
+        event_ctx,
+    )
     ex_intent    = event_ctx.get("intent_why") or ""
     ex_buyers    = event_ctx.get("intent_buyers") or ""
 
@@ -58,6 +154,9 @@ EXHIBITOR CONTEXT:
 - Product / solution: {ex_product}
 - Target categories: {ex_cats}
 - Target visitor roles: {ex_icp_roles}
+- Target company sizes: {ex_icp_sizes}
+- Target visit reasons: {ex_icp_reasons}
+- Structural ICP fit (pre-computed from role/size match): {structural_icp:.2f}
 - Exhibitor intent: {ex_intent}
 - Ideal buyer profile: {ex_buyers}
 
@@ -86,7 +185,7 @@ Respond ONLY with a valid JSON object — no explanation, no markdown:
 }}
 
 Rules:
-- icp_fit_score: how well this visitor matches the exhibitor's ideal buyer (1.0 = perfect match, 0.0 = no match)
+- icp_fit_score: how well this visitor matches the exhibitor's ideal buyer. Use the structural ICP fit ({structural_icp:.2f}) as your anchor — adjust by ±0.15 based on additional context you have about this person's company or role
 - seniority_score: buying authority (1.0 = CEO/CXO, 0.75 = Director/VP, 0.5 = Manager, 0.3 = Analyst)
 - buying_cycle_stage: evidence of active evaluation (1.0 = active RFP/procurement, 0.5 = researching, 0.1 = awareness)
 - trigger_event_score: recent company signals like funding, expansion, new hire (0-1)
@@ -232,6 +331,9 @@ async def rescore_all(
     if not contacts:
         return {"rescored": 0, "message": "No contacts found"}
 
+    # Fetch event context for ICP scoring
+    event_ctx = _get_event_context(db, event_id)
+
     # Build visitor payloads
     rows = []
     for c in contacts:
@@ -242,7 +344,11 @@ async def rescore_all(
             "job_title":             c.get("designation"),
             "company":               c.get("company"),
             "industry":              c.get("industry"),
-            "icp_fit_score":         float(c.get("icp_fit_score") or 0.5),
+            "icp_fit_score":         compute_icp_fit(
+                                         c.get("designation") or "",
+                                         c.get("company_size") or "",
+                                         event_ctx,
+                                     ),
             "company_size_match":    float(c.get("company_size_match") or 0.5),
             "buying_cycle_stage":    float(c.get("buying_cycle_stage") or 0.0),
             "trigger_event_score":   float(c.get("trigger_event_score") or 0.0),
