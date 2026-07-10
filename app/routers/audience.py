@@ -399,54 +399,6 @@ async def rescore_all(
 
 
 
-# ── Temp public rescore (remove after use) ───────────────────────────────────
-@router.post("/rescore-public/{event_id}")
-async def rescore_public(event_id: str):
-    db = get_db()
-    event_ctx = _get_event_context(db, event_id)
-    contacts = db.table("audience_contacts").select(
-        "id,designation,company,company_size,industry,raw_data"
-    ).eq("event_id", event_id).execute().data or []
-    if not contacts:
-        return {"rescored": 0}
-
-    def safe(v, default=0.0):
-        try: return float(v) if v is not None else default
-        except: return default
-
-    rows = []
-    for c in contacts:
-        raw = c.get("raw_data") or {}
-        icp = compute_icp_fit(c.get("designation") or "", c.get("company_size") or "", event_ctx)
-        rows.append({
-            "id":                       c["id"],
-            "job_title":                c.get("designation") or "",
-            "designation":              c.get("designation") or "",
-            "company":                  c.get("company") or "",
-            "icp_fit_score":            icp,
-            "company_size_match":       safe(raw.get("company_size_match"), 0.5),
-            "buying_cycle_stage":       safe(raw.get("buying_cycle_stage"), 0.0),
-            "trigger_event_score":      safe(raw.get("trigger_event_score"), 0.0),
-            "competitive_displacement": safe(raw.get("competitive_displacement"), 0.0),
-            "seniority_score":          safe(raw.get("seniority_score"), 0.0),
-            "tech_stack_compatibility": safe(raw.get("tech_stack_compatibility"), 0.0),
-            "previous_event_history":   safe(raw.get("previous_event_history"), 0.0),
-            "profile_completeness":     safe(raw.get("profile_completeness"), 0.5),
-            "categories_specificity":   safe(raw.get("categories_specificity"), 0.0),
-        })
-    all_scores = []
-    for i in range(0, len(rows), 20):
-        batch_scores = await _score_batch(rows[i:i+20])
-        all_scores.extend(batch_scores)
-    tier_counts = {}
-    for contact, score in zip(contacts, all_scores):
-        iei  = round(float(score.get("ieiScore", 43)), 2)
-        reg  = round(float(score.get("regProb", 0.43)), 4)
-        tier = score.get("ieiTier", "T2")
-        tier_counts[tier] = tier_counts.get(tier, 0) + 1
-        db.table("audience_contacts").update({"iei_score": iei, "reg_prob": reg}).eq("id", contact["id"]).execute()
-    return {"rescored": len(contacts), "tier_distribution": tier_counts}
-
 # ── Upload endpoint ───────────────────────────────────────────────────────────
 @router.post("/upload/{event_id}")
 async def upload_audience(
