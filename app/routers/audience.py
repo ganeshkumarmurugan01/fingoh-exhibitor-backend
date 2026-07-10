@@ -399,6 +399,207 @@ async def rescore_all(
 
 
 
+
+
+# ── Public registration endpoint ──────────────────────────────────────────────
+from pydantic import BaseModel as _BaseModel
+from typing import Optional as _Optional
+
+class RegistrationPayload(_BaseModel):
+    # Standard fields
+    name:              str
+    email:             str
+    company:           str
+    job_title:         _Optional[str] = None
+    country:           _Optional[str] = None
+    phone:             _Optional[str] = None
+    city:              _Optional[str] = None
+    # Intent intelligence questions
+    visited_booth_last_year:   _Optional[bool] = None
+    had_meeting_last_year:     _Optional[bool] = None
+    is_existing_customer:      _Optional[str]  = None   # "yes" | "no" | "evaluating"
+    actively_sourcing:         _Optional[bool] = None
+    purchase_timeline:         _Optional[str]  = None   # "<3months" | "3-6months" | "6-12months" | "no_plan"
+    wants_meeting:             _Optional[bool] = None
+    preferred_visit_day:       _Optional[str]  = None
+    specific_product_interest: _Optional[str]  = None
+    categories_interest:       _Optional[str]  = None
+    primary_reason:            _Optional[str]  = None
+
+
+def _map_registration_signals(payload: RegistrationPayload) -> dict:
+    """Map registration form answers to IEI signal values."""
+    signals = {}
+
+    # Previous event history
+    prev_score = 0.0
+    if payload.visited_booth_last_year:  prev_score += 0.5
+    if payload.had_meeting_last_year:    prev_score += 0.5
+    if prev_score > 0:
+        signals["previous_event_history"] = min(prev_score, 1.0)
+
+    # Buying cycle stage
+    timeline_map = {
+        "<3months":   1.0,
+        "3-6months":  0.75,
+        "6-12months": 0.5,
+        "no_plan":    0.1,
+    }
+    if payload.purchase_timeline:
+        signals["buying_cycle_stage"] = timeline_map.get(payload.purchase_timeline, 0.3)
+
+    if payload.actively_sourcing:
+        signals["buying_cycle_stage"] = max(signals.get("buying_cycle_stage", 0), 0.8)
+
+    # Trigger event score
+    if payload.purchase_timeline == "<3months":
+        signals["trigger_event_score"] = 0.9
+    elif payload.actively_sourcing:
+        signals["trigger_event_score"] = 0.7
+
+    # Meeting intent
+    if payload.wants_meeting:
+        signals["meeting_requests_sent"] = 0.9
+
+    # Categories specificity
+    if payload.specific_product_interest:
+        signals["categories_specificity"] = 0.8
+    elif payload.categories_interest:
+        signals["categories_specificity"] = 0.5
+
+    # Profile completeness boost
+    filled = sum(1 for v in [payload.job_title, payload.country, payload.phone, payload.city] if v)
+    signals["profile_completeness"] = 0.4 + (filled * 0.15)
+
+    return signals
+
+
+@router.post("/register/{event_id}")
+async def register_visitor(event_id: str, payload: RegistrationPayload):
+    """
+    Public registration endpoint — no auth required.
+    Accepts visitor self-registration, matches existing contacts,
+    applies intent signals, and rescores.
+    """
+    db = get_db()
+
+    # Verify event exists and is active
+    ev = db.table("events").select("id,name,company,product,date_from,date_to").eq("id", event_id).maybe_single().execute()
+    if not ev or not ev.data:
+        raise HTTPException(status_code=404, detail="Event not found")
+    event = ev.data
+
+    # Map registration answers to signals
+    reg_signals = _map_registration_signals(payload)
+
+    # Check if contact already exists (match by email)
+    existing = db.table("audience_contacts").select("*").eq("event_id", event_id).eq("email", payload.email).maybe_single().execute()
+
+    if existing and existing.data:
+        contact = existing.data
+        contact_id = contact["id"]
+
+        # Merge signals into raw_data
+        raw = contact.get("raw_data") or {}
+        raw.update(reg_signals)
+        raw["registration_form_completed"] = True
+        raw["wants_meeting"] = payload.wants_meeting
+        raw["preferred_visit_day"] = payload.preferred_visit_day
+        raw["specific_product_interest"] = payload.specific_product_interest
+        raw["visited_booth_last_year"] = payload.visited_booth_last_year
+        raw["had_meeting_last_year"] = payload.had_meeting_last_year
+        raw["purchase_timeline"] = payload.purchase_timeline
+
+        # Update contact fields
+        update_data = {"raw_data": raw, "source": "registration_form"}
+        if payload.job_title:   update_data["designation"] = payload.job_title
+        if payload.phone:       update_data["phone"] = payload.phone
+        if payload.city:        update_data["city"] = payload.city
+        if payload.country:     update_data["country"] = payload.country
+
+        db.table("audience_contacts").update(update_data).eq("id", contact_id).execute()
+        is_new = False
+
+    else:
+        # New contact — create record
+        raw = {"registration_form_completed": True, **reg_signals}
+        raw["wants_meeting"] = payload.wants_meeting
+        raw["preferred_visit_day"] = payload.preferred_visit_day
+        raw["specific_product_interest"] = payload.specific_product_interest
+        raw["visited_booth_last_year"] = payload.visited_booth_last_year
+        raw["had_meeting_last_year"] = payload.had_meeting_last_year
+        raw["purchase_timeline"] = payload.purchase_timeline
+
+        insert_res = db.table("audience_contacts").insert({
+            "event_id":    event_id,
+            "name":        payload.name,
+            "email":       payload.email,
+            "company":     payload.company,
+            "designation": payload.job_title,
+            "phone":       payload.phone,
+            "city":        payload.city,
+            "country":     payload.country,
+            "raw_data":    raw,
+            "source":      "registration_form",
+        }).execute()
+        contact_id = insert_res.data[0]["id"] if insert_res.data else None
+        is_new = True
+
+    # Rescore with registration signals
+    event_ctx = _get_event_context(db, event_id)
+    score_row = {
+        "id":                       contact_id,
+        "job_title":                payload.job_title or "",
+        "designation":              payload.job_title or "",
+        "icp_fit_score":            compute_icp_fit(payload.job_title or "", "", event_ctx),
+        "profile_completeness":     reg_signals.get("profile_completeness", 0.5),
+        "buying_cycle_stage":       reg_signals.get("buying_cycle_stage", 0.0),
+        "trigger_event_score":      reg_signals.get("trigger_event_score", 0.0),
+        "meeting_requests_sent":    reg_signals.get("meeting_requests_sent", 0.0),
+        "categories_specificity":   reg_signals.get("categories_specificity", 0.0),
+        "previous_event_history":   reg_signals.get("previous_event_history", 0.0),
+    }
+
+    scores = await _score_batch([score_row])
+    if scores:
+        iei  = round(float(scores[0].get("ieiScore", 43)), 2)
+        reg  = round(float(scores[0].get("regProb", 0.43)), 4)
+        tier = scores[0].get("ieiTier", "T2")
+        db.table("audience_contacts").update({
+            "iei_score": iei,
+            "reg_prob":  reg,
+        }).eq("id", contact_id).execute()
+
+    return {
+        "success":    True,
+        "is_new":     is_new,
+        "contact_id": contact_id,
+        "event_name": event.get("name"),
+        "exhibitor":  event.get("company"),
+        "message":    "Thank you for registering! We look forward to seeing you at the event.",
+        "wants_meeting": payload.wants_meeting,
+    }
+
+
+@router.get("/register/{event_id}/info")
+def get_registration_info(event_id: str):
+    """Public endpoint — returns event + exhibitor info for the registration form."""
+    db = get_db()
+    ev = db.table("events").select(
+        "id, name, company, product, date_from, date_to, venue, country"
+    ).eq("id", event_id).maybe_single().execute()
+    if not ev or not ev.data:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    cats = db.table("event_categories").select("category").eq("event_id", event_id).execute()
+    categories = [c["category"] for c in (cats.data or [])]
+
+    return {
+        **ev.data,
+        "categories": categories,
+    }
+
+
 # ── Upload endpoint ───────────────────────────────────────────────────────────
 @router.post("/upload/{event_id}")
 async def upload_audience(
