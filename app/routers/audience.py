@@ -133,7 +133,6 @@ async def _score_batch(rows: list[dict]) -> list[dict]:
 @router.post("/rescore/{event_id}")
 async def rescore_all(
     event_id: str,
-    current_user: dict = Depends(get_current_user),
 ):
     """Rescore all contacts in an event with the latest Modal model."""
     db = get_db()
