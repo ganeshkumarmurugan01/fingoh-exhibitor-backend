@@ -206,27 +206,34 @@ async def rescore_all(
 async def rescore_public(event_id: str):
     db = get_db()
     contacts = db.table("audience_contacts").select(
-        "id,designation,icp_fit_score,company_size_match,buying_cycle_stage,"
-        "trigger_event_score,competitive_displacement,seniority_score,"
-        "previous_event_history,profile_completeness"
+        "id,designation,company,industry,company_size,raw_data"
     ).eq("event_id", event_id).execute().data or []
 
     if not contacts:
         return {"rescored": 0}
 
-    rows = [{
-        "id":                       c["id"],
-        "job_title":                c.get("designation") or "",
-        "designation":              c.get("designation") or "",
-        "icp_fit_score":            float(c.get("icp_fit_score") or 0.5),
-        "company_size_match":       float(c.get("company_size_match") or 0.5),
-        "buying_cycle_stage":       float(c.get("buying_cycle_stage") or 0.0),
-        "trigger_event_score":      float(c.get("trigger_event_score") or 0.0),
-        "competitive_displacement": float(c.get("competitive_displacement") or 0.0),
-        "seniority_score":          float(c.get("seniority_score") or 0.0),
-        "previous_event_history":   float(c.get("previous_event_history") or 0.0),
-        "profile_completeness":     float(c.get("profile_completeness") or 0.5),
-    } for c in contacts]
+    def safe(v, default=0.0):
+        try: return float(v) if v is not None else default
+        except: return default
+
+    rows = []
+    for c in contacts:
+        raw = c.get("raw_data") or {}
+        rows.append({
+            "id":                       c["id"],
+            "job_title":                c.get("designation") or "",
+            "designation":              c.get("designation") or "",
+            "company":                  c.get("company") or "",
+            "industry":                 c.get("industry") or "",
+            "icp_fit_score":            safe(raw.get("icp_fit_score"), 0.5),
+            "company_size_match":       safe(raw.get("company_size_match"), 0.5),
+            "buying_cycle_stage":       safe(raw.get("buying_cycle_stage"), 0.0),
+            "trigger_event_score":      safe(raw.get("trigger_event_score"), 0.0),
+            "competitive_displacement": safe(raw.get("competitive_displacement"), 0.0),
+            "seniority_score":          safe(raw.get("seniority_score"), 0.0),
+            "previous_event_history":   safe(raw.get("previous_event_history"), 0.0),
+            "profile_completeness":     safe(raw.get("profile_completeness"), 0.5),
+        })
 
     all_scores = []
     for i in range(0, len(rows), 20):
