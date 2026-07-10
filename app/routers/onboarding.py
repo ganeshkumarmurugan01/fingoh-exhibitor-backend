@@ -31,7 +31,8 @@ def get_my_profile(current_user: dict = Depends(get_current_user)):
         if org_res and org_res.data:
             org_name = org_res.data.get("name")
 
-    return {**profile, "org_name": org_name}
+    email = current_user.get("email") or ""
+    return {**profile, "org_name": org_name, "email": email}
 
 
 @router.post("/organisation", response_model=OrganisationResponse, status_code=201)
