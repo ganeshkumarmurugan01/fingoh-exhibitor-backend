@@ -230,3 +230,101 @@ async def get_events_for_staff(email: str):
     # Get events for this org
     events_res = db.table("events").select("id,name,date_from,date_to,venue,status").eq("org_id", org_id).execute()
     return events_res.data or []
+
+
+# ── AI-powered event ICP research ────────────────────────────────────────────
+import httpx as _httpx
+import os as _os
+
+@router.get("/research-icp")
+async def research_event_icp(
+    event_name: str,
+    venue: str = "",
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Use Claude with web search to find real visitor profiles and categories
+    for a given event name. Returns suggested visitor segments, roles, and
+    categories based on the event's actual audience.
+    """
+    ANTHROPIC_API_KEY = _os.getenv("ANTHROPIC_API_KEY")
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=500, detail="Anthropic API key not configured")
+
+    prompt = f"""You are an event intelligence analyst. Research the trade fair or exhibition called "{event_name}"{f" at {venue}" if venue else ""}.
+
+Find information about:
+1. Who attends this event (visitor profiles, job titles, industries)
+2. What categories/sectors are represented
+3. What are the primary visit reasons (sourcing, evaluation, research etc.)
+4. Typical company sizes of attendees
+
+Based on your research, return ONLY a JSON object (no markdown, no explanation) with this exact structure:
+{{
+  "found": true,
+  "event_description": "One sentence describing the event",
+  "visitor_categories": ["Category 1", "Category 2", ...],
+  "visitor_roles": ["Role 1", "Role 2", ...],
+  "company_sizes": ["Size 1", "Size 2", ...],
+  "visit_reasons": ["Reason 1", "Reason 2", ...],
+  "industries": ["Industry 1", "Industry 2", ...],
+  "source_hint": "Brief note on where this info was found"
+}}
+
+Rules:
+- visitor_categories: 6-12 specific product/technology categories visitors come to see
+- visitor_roles: 6-10 actual job titles common at this event
+- company_sizes: 3-5 company size segments that typically attend
+- visit_reasons: 4-6 primary reasons visitors attend
+- industries: 4-8 industries represented
+- If you cannot find specific info, make reasonable inferences based on the event name and type
+- Keep all items concise (under 40 chars each)
+- Return ONLY the JSON, nothing else"""
+
+    try:
+        async with _httpx.AsyncClient(timeout=45) as client:
+            res = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key":         ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type":      "application/json",
+                },
+                json={
+                    "model":   "claude-opus-4-8",
+                    "max_tokens": 800,
+                    "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+        if res.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"Claude error: {res.text[:200]}")
+
+        data = res.json()
+        # Extract text from response content blocks
+        text = ""
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                text += block.get("text", "")
+
+        # Parse JSON from response
+        import json, re
+        json_match = re.search(r'\{.*\}', text, re.DOTALL)
+        if json_match:
+            result = json.loads(json_match.group())
+            return result
+        else:
+            # Fallback if Claude didn't return valid JSON
+            return {
+                "found": False,
+                "event_description": f"{event_name} trade fair",
+                "visitor_categories": [],
+                "visitor_roles": [],
+                "company_sizes": [],
+                "visit_reasons": [],
+                "industries": [],
+                "source_hint": "Could not parse response",
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"ICP research failed: {str(e)}")
