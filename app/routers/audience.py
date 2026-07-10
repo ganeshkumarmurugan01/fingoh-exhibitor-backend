@@ -399,6 +399,37 @@ async def rescore_all(
 
 
 
+# ── Temp public rescore (remove after use) ───────────────────────────────────
+@router.post("/rescore-public/{event_id}")
+async def rescore_public(event_id: str):
+    db = get_db()
+    event_ctx = _get_event_context(db, event_id)
+    contacts = db.table("audience_contacts").select(
+        "id,designation,company_size,raw_data"
+    ).eq("event_id", event_id).execute().data or []
+    if not contacts:
+        return {"rescored": 0}
+    rows = [{
+        "id":           c["id"],
+        "job_title":    c.get("designation") or "",
+        "designation":  c.get("designation") or "",
+        "icp_fit_score": compute_icp_fit(c.get("designation") or "", c.get("company_size") or "", event_ctx),
+        "company_size_match": 0.5,
+        "profile_completeness": 0.5,
+    } for c in contacts]
+    all_scores = []
+    for i in range(0, len(rows), 20):
+        batch_scores = await _score_batch(rows[i:i+20])
+        all_scores.extend(batch_scores)
+    tier_counts = {}
+    for contact, score in zip(contacts, all_scores):
+        iei  = round(float(score.get("ieiScore", 43)), 2)
+        reg  = round(float(score.get("regProb", 0.43)), 4)
+        tier = score.get("ieiTier", "T2")
+        tier_counts[tier] = tier_counts.get(tier, 0) + 1
+        db.table("audience_contacts").update({"iei_score": iei, "reg_prob": reg}).eq("id", contact["id"]).execute()
+    return {"rescored": len(contacts), "tier_distribution": tier_counts}
+
 # ── Upload endpoint ───────────────────────────────────────────────────────────
 @router.post("/upload/{event_id}")
 async def upload_audience(
