@@ -89,6 +89,11 @@ def create_event(
     return _build_event_detail(event, db)
 
 
+# ── AI-powered event ICP research ────────────────────────────────────────────
+import httpx as _httpx
+import os as _os
+
+
 @router.get("/{event_id}", response_model=EventDetailResponse)
 def get_event(
     event_id: str,
@@ -231,10 +236,6 @@ async def get_events_for_staff(email: str):
     events_res = db.table("events").select("id,name,date_from,date_to,venue,status").eq("org_id", org_id).execute()
     return events_res.data or []
 
-
-# ── AI-powered event ICP research ────────────────────────────────────────────
-import httpx as _httpx
-import os as _os
 
 @router.get("/research-icp")
 async def research_event_icp(
