@@ -427,49 +427,71 @@ class RegistrationPayload(_BaseModel):
     primary_reason:            _Optional[str]  = None
 
 
-def _map_registration_signals(payload: RegistrationPayload) -> dict:
-    """Map registration form answers to IEI signal values."""
+def _map_registration_signals(payload: RegistrationPayload, event_date_from: str = None) -> dict:
+    """
+    Map registration form answers to modest IEI signal boosts.
+
+    Philosophy:
+    - Registration signals are DECLARED intent — self-reported, subjective
+    - They should give a small boost (5-15 pts), not dramatically change score
+    - The key BEHAVIOURAL signal is reg_timing_days (how early they registered)
+    - Real score movement happens onsite from actual behaviour
+    """
     signals = {}
 
-    # Previous event history
-    prev_score = 0.0
-    if payload.visited_booth_last_year:  prev_score += 0.5
-    if payload.had_meeting_last_year:    prev_score += 0.5
-    if prev_score > 0:
-        signals["previous_event_history"] = min(prev_score, 1.0)
+    # ── Behavioural: Registration timing (most reliable pre-event signal) ──
+    # Earlier registration = higher interest in attending
+    if event_date_from:
+        try:
+            from datetime import date
+            event_date = date.fromisoformat(event_date_from)
+            days_before = (event_date - date.today()).days
+            if days_before >= 60:    signals["reg_timing_days"] = 1.0   # Very early
+            elif days_before >= 30:  signals["reg_timing_days"] = 0.8   # Early
+            elif days_before >= 14:  signals["reg_timing_days"] = 0.6   # Normal
+            elif days_before >= 7:   signals["reg_timing_days"] = 0.4   # Late
+            else:                    signals["reg_timing_days"] = 0.2   # Last minute
+        except:
+            signals["reg_timing_days"] = 0.5
 
-    # Buying cycle stage
+    # ── Declared: Previous event history (modest boost) ───────────────────
+    prev_score = 0.0
+    if payload.visited_booth_last_year:  prev_score += 0.35
+    if payload.had_meeting_last_year:    prev_score += 0.35
+    if prev_score > 0:
+        signals["previous_event_history"] = min(prev_score, 0.7)
+
+    # ── Declared: Buying intent (small signal, self-reported) ────────────
+    # Modest values — declared intent is not behavioural proof
     timeline_map = {
-        "<3months":   1.0,
-        "3-6months":  0.75,
-        "6-12months": 0.5,
-        "no_plan":    0.1,
+        "<3months":   0.55,   # Not 1.0 — they said it, didn't prove it
+        "3-6months":  0.40,
+        "6-12months": 0.25,
+        "no_plan":    0.05,
     }
     if payload.purchase_timeline:
-        signals["buying_cycle_stage"] = timeline_map.get(payload.purchase_timeline, 0.3)
+        signals["buying_cycle_stage"] = timeline_map.get(payload.purchase_timeline, 0.2)
 
     if payload.actively_sourcing:
-        signals["buying_cycle_stage"] = max(signals.get("buying_cycle_stage", 0), 0.8)
+        signals["buying_cycle_stage"] = max(signals.get("buying_cycle_stage", 0), 0.45)
 
-    # Trigger event score
-    if payload.purchase_timeline == "<3months":
-        signals["trigger_event_score"] = 0.9
-    elif payload.actively_sourcing:
-        signals["trigger_event_score"] = 0.7
+    # Trigger event — only if very short timeline
+    if payload.purchase_timeline == "<3months" and payload.actively_sourcing:
+        signals["trigger_event_score"] = 0.45   # Modest — declared, not behavioural
 
-    # Meeting intent
-    if payload.wants_meeting:
-        signals["meeting_requests_sent"] = 0.9
+    # ── Declared: Meeting intent (weak signal until confirmed) ────────────
+    if payload.wants_meeting == "yes":
+        signals["meeting_requests_sent"] = 0.4  # They said yes — not a confirmed request
 
-    # Categories specificity
-    if payload.specific_product_interest:
-        signals["categories_specificity"] = 0.8
+    # ── Declared: Product interest specificity ────────────────────────────
+    if payload.specific_product_interest and len(payload.specific_product_interest) > 5:
+        signals["categories_specificity"] = 0.5  # Specific = slightly higher
     elif payload.categories_interest:
-        signals["categories_specificity"] = 0.5
+        signals["categories_specificity"] = 0.3
 
-    # Profile completeness boost
+    # ── Profile completeness (factual, reliable) ──────────────────────────
     filled = sum(1 for v in [payload.job_title, payload.country, payload.phone, payload.city] if v)
-    signals["profile_completeness"] = 0.4 + (filled * 0.15)
+    signals["profile_completeness"] = 0.4 + (filled * 0.1)
 
     return signals
 
@@ -490,7 +512,7 @@ async def register_visitor(event_id: str, payload: RegistrationPayload):
     event = ev.data
 
     # Map registration answers to signals
-    reg_signals = _map_registration_signals(payload)
+    reg_signals = _map_registration_signals(payload, event.get("date_from"))
 
     # Check if contact already exists (match by email)
     existing = db.table("audience_contacts").select("*").eq("event_id", event_id).eq("email", payload.email).maybe_single().execute()
