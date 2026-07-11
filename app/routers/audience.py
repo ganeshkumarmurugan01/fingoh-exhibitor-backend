@@ -567,29 +567,58 @@ async def register_visitor(event_id: str, payload: RegistrationPayload):
         contact_id = insert_res.data[0]["id"] if insert_res.data else None
         is_new = True
 
-    # Rescore with registration signals
+    # ── Full rescore using ALL signals (original + registration merged) ─────
+    # Fetch full contact record to get all existing signals
+    full_contact = db.table("audience_contacts").select("*").eq(
+        "id", contact_id
+    ).maybe_single().execute()
+    full = (full_contact.data or {}) if full_contact else {}
+    existing_raw = full.get("raw_data") or {}
+
+    # Merge: existing signals + new registration signals
+    # Registration signals use modest values (declared intent, not behavioural)
+    # but they CAN move score both up AND down
+    merged_signals = {**existing_raw, **reg_signals}
+
+    def safe(v, default=0.0):
+        try: return float(v) if v is not None else default
+        except: return default
+
     event_ctx = _get_event_context(db, event_id)
     score_row = {
         "id":                       contact_id,
-        "job_title":                payload.job_title or "",
-        "designation":              payload.job_title or "",
-        "icp_fit_score":            compute_icp_fit(payload.job_title or "", "", event_ctx),
-        "profile_completeness":     reg_signals.get("profile_completeness", 0.5),
-        "buying_cycle_stage":       reg_signals.get("buying_cycle_stage", 0.0),
-        "trigger_event_score":      reg_signals.get("trigger_event_score", 0.0),
-        "meeting_requests_sent":    reg_signals.get("meeting_requests_sent", 0.0),
-        "categories_specificity":   reg_signals.get("categories_specificity", 0.0),
-        "previous_event_history":   reg_signals.get("previous_event_history", 0.0),
+        "job_title":                full.get("designation") or payload.job_title or "",
+        "designation":              full.get("designation") or payload.job_title or "",
+        "company":                  full.get("company") or payload.company or "",
+        "icp_fit_score":            compute_icp_fit(
+                                        full.get("designation") or payload.job_title or "",
+                                        full.get("company_size") or "",
+                                        event_ctx,
+                                    ),
+        # Original structural signals
+        "company_size_match":       safe(existing_raw.get("company_size_match"), 0.5),
+        "seniority_score":          safe(existing_raw.get("seniority_score"), 0.0),
+        "tech_stack_compatibility": safe(existing_raw.get("tech_stack_compatibility"), 0.0),
+        "competitive_displacement": safe(existing_raw.get("competitive_displacement"), 0.0),
+        # Registration signals (declared intent — modest values)
+        "profile_completeness":     safe(merged_signals.get("profile_completeness"), 0.5),
+        "reg_timing_days":          safe(merged_signals.get("reg_timing_days"), 0.0),
+        "buying_cycle_stage":       safe(merged_signals.get("buying_cycle_stage"), 0.0),
+        "trigger_event_score":      safe(merged_signals.get("trigger_event_score"), 0.0),
+        "meeting_requests_sent":    safe(merged_signals.get("meeting_requests_sent"), 0.0),
+        "categories_specificity":   safe(merged_signals.get("categories_specificity"), 0.0),
+        "previous_event_history":   safe(merged_signals.get("previous_event_history"), 0.0),
     }
 
     scores = await _score_batch([score_row])
+    new_iei = float(full.get("iei_score") or 43)
+    new_reg = float(full.get("reg_prob") or 0.43)
     if scores:
-        iei  = round(float(scores[0].get("ieiScore", 43)), 2)
-        reg  = round(float(scores[0].get("regProb", 0.43)), 4)
-        tier = scores[0].get("ieiTier", "T2")
+        new_iei = round(float(scores[0].get("ieiScore", new_iei)), 2)
+        new_reg = round(float(scores[0].get("regProb", new_reg)), 4)
         db.table("audience_contacts").update({
-            "iei_score": iei,
-            "reg_prob":  reg,
+            "iei_score": new_iei,
+            "reg_prob":  new_reg,
         }).eq("id", contact_id).execute()
 
     return {
