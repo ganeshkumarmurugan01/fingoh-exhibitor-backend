@@ -707,6 +707,27 @@ async def rescore_one(event_id: str, email: str):
 
 
 
+
+
+@router.get("/register/{event_id}/check-email")
+def check_email_registered(event_id: str, email: str):
+    """Check if email is already registered for this event — public endpoint."""
+    db = get_db()
+    existing = db.table("audience_contacts").select("id, name, raw_data").eq(
+        "event_id", event_id
+    ).eq("email", email).maybe_single().execute()
+
+    if existing and existing.data:
+        raw = existing.data.get("raw_data") or {}
+        already_registered = raw.get("registration_form_completed", False)
+        return {
+            "exists":             True,
+            "already_registered": already_registered,
+            "name":               existing.data.get("name"),
+        }
+    return {"exists": False, "already_registered": False, "name": None}
+
+
 # ── Upload endpoint ───────────────────────────────────────────────────────────
 @router.post("/upload/{event_id}")
 async def upload_audience(
