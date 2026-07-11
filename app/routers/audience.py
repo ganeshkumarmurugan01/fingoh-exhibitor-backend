@@ -521,8 +521,22 @@ async def register_visitor(event_id: str, payload: RegistrationPayload):
         contact = existing.data
         contact_id = contact["id"]
 
+        # Check if already registered — return friendly message
+        existing_raw = contact.get("raw_data") or {}
+        if existing_raw.get("registration_form_completed"):
+            return {
+                "success":      True,
+                "already_registered": True,
+                "is_new":       False,
+                "contact_id":   contact_id,
+                "event_name":   event.get("name"),
+                "exhibitor":    event.get("company"),
+                "message":      f"You're already registered for {event.get('name')}! We look forward to seeing you at the event.",
+                "wants_meeting": existing_raw.get("wants_meeting"),
+            }
+
         # Merge signals into raw_data
-        raw = contact.get("raw_data") or {}
+        raw = existing_raw.copy()
         raw.update(reg_signals)
         raw["registration_form_completed"] = True
         raw["wants_meeting"] = payload.wants_meeting
