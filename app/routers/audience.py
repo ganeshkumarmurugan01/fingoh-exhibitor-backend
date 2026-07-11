@@ -600,6 +600,48 @@ def get_registration_info(event_id: str):
     }
 
 
+
+
+# ── Temp: rescore single contact by email (remove after use) ─────────────────
+@router.post("/rescore-one")
+async def rescore_one(event_id: str, email: str):
+    db = get_db()
+    event_ctx = _get_event_context(db, event_id)
+    c = db.table("audience_contacts").select(
+        "id,designation,company_size,raw_data"
+    ).eq("event_id", event_id).eq("email", email).maybe_single().execute()
+    if not c or not c.data:
+        return {"error": "Contact not found"}
+    contact = c.data
+
+    def safe(v, default=0.0):
+        try: return float(v) if v is not None else default
+        except: return default
+
+    raw = contact.get("raw_data") or {}
+    row = {
+        "id":                       contact["id"],
+        "job_title":                contact.get("designation") or "",
+        "icp_fit_score":            compute_icp_fit(contact.get("designation") or "", contact.get("company_size") or "", event_ctx),
+        "buying_cycle_stage":       safe(raw.get("buying_cycle_stage"), 0.0),
+        "trigger_event_score":      safe(raw.get("trigger_event_score"), 0.0),
+        "meeting_requests_sent":    safe(raw.get("meeting_requests_sent"), 0.0),
+        "previous_event_history":   safe(raw.get("previous_event_history"), 0.0),
+        "categories_specificity":   safe(raw.get("categories_specificity"), 0.0),
+        "profile_completeness":     safe(raw.get("profile_completeness"), 0.5),
+    }
+    scores = await _score_batch([row])
+    if scores:
+        iei  = round(float(scores[0].get("ieiScore", 43)), 2)
+        reg  = round(float(scores[0].get("regProb", 0.43)), 4)
+        db.table("audience_contacts").update({
+            "iei_score": iei, "reg_prob": reg,
+        }).eq("id", contact["id"]).execute()
+        return {"email": email, "new_iei_score": iei, "old_iei_score": float(raw.get("iei_score", 0))}
+    return {"error": "Scoring failed"}
+
+
+
 # ── Upload endpoint ───────────────────────────────────────────────────────────
 @router.post("/upload/{event_id}")
 async def upload_audience(
