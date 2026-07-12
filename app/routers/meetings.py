@@ -490,15 +490,15 @@ VISITOR PROFILE:
 - Name: {p.get("name")}
 - Role: {p.get("designation")}
 - Company: {p.get("company")} ({p.get("country")})
-- IEI Score: {p.get("iei_score", 0):.1f} ({p.get("iei_tier", "T3")} tier)
+- IEI Score: {float(p.get("iei_score") or 0):.1f} ({p.get("iei_tier", "T3")} tier)
 - Visit reason: {p.get("primary_reason") or "Not stated"}
 - Product categories of interest: {p.get("categories_interest") or "Not specified"}
 - Wants meeting: {"YES - explicitly opted in" if p.get("meeting_interest") in [True, "yes"] else "NO - opted out" if p.get("meeting_interest") in [False, "no"] else "Not specified"}
 - Purchase timeline: {p.get("purchase_timeline") or "Not stated"}
 - Actively sourcing: {"Yes" if p.get("actively_sourcing") else "No"}
 - Specific product interest: {p.get("specific_product") or "Not stated"}
-- LambdaMART match score: {round(p.get("match_score", 0))}/100
-- Meeting probability: {round((p.get("meeting_prob", 0))*100)}%
+- LambdaMART match score: {round(float(p.get("match_score") or 0))}/100
+- Meeting probability: {round(float(p.get("meeting_prob") or 0)*100)}%
 
 Analyse whether this visitor is genuinely a good meeting candidate for this exhibitor. Consider:
 1. Does their ROLE match the exhibitor's target buyer roles?
