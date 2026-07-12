@@ -306,7 +306,7 @@ async def get_meeting_prospects(
     event_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    """Get ranked prospects for meeting requests using LambdaMART scoring."""
+    """Get ranked prospects for meeting requests using IEI-based match scoring."""
     db = get_db()
 
     # Get all contacts for this event
@@ -320,9 +320,9 @@ async def get_meeting_prospects(
     meetings_res = db.table("meeting_requests").select("contact_id, status").eq("event_id", event_id).execute()
     requested = {m["contact_id"]: m["status"] for m in (meetings_res.data or [])}
 
-    # Score contacts using LambdaMART
+    # Score contacts using IEI-based features
     def derive_features(c):
-        """Derive LambdaMART features from available contact data."""
+        """Derive IEI-based match features from available contact data."""
         raw = c.get("raw_data") or {}
         title = (c.get("designation") or "").lower()
         reason = (c.get("primary_reason") or "").lower()
@@ -410,7 +410,7 @@ async def get_meeting_prospects(
 
     visitors_payload = [derive_features(c) for c in contacts]
 
-    # Call Modal LambdaMART scorer
+    # Call Modal scorer if configured
     match_scores = {}
     if MEETING_SCORER_URL:
         try:
@@ -438,7 +438,9 @@ async def get_meeting_prospects(
             "email":            c.get("email", ""),
             "iei_score":        c.get("iei_score", 0),
             "iei_tier":         c.get("iei_tier", "Cool"),
-            "reg_prob":         c.get("reg_prob", 0.5),
+            "reg_prob":             c.get("reg_prob", 0.5),
+            "cached_analysis":      c.get("meeting_match_analysis"),
+            "cached_analysed_at":   c.get("meeting_match_analysed_at"),
             "primary_reason":   c.get("primary_reason") or raw.get("primary_reason", ""),
             "categories_interest": c.get("categories_interest") or raw.get("categories_interest", ""),
             "meeting_interest": raw.get("wants_meeting") or c.get("meeting_interest"),
@@ -460,18 +462,32 @@ async def get_meeting_prospects(
 class MatchAnalysisRequest(BaseModel):
     prospect: dict
     exhibitor: dict
+    force_refresh: bool = False
 
 @router.post("/match-analysis")
 async def match_analysis(
     payload: MatchAnalysisRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    """Generate Claude-powered intent match analysis between a prospect and exhibitor ICP."""
+    """Generate IEI-based intent match analysis between a prospect and exhibitor ICP."""
     if not ANTHROPIC_API_KEY:
         raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
 
     p   = payload.prospect
     ex  = payload.exhibitor
+    contact_id = p.get("contact_id")
+
+    # ── Check cache unless force_refresh ─────────────────────────────────────
+    if contact_id and not payload.force_refresh:
+        db = get_db()
+        cached = db.table("audience_contacts").select(
+            "meeting_match_analysis, meeting_match_analysed_at"
+        ).eq("id", contact_id).maybe_single().execute()
+        if cached and cached.data and cached.data.get("meeting_match_analysis"):
+            result = cached.data["meeting_match_analysis"]
+            result["cached_at"] = cached.data.get("meeting_match_analysed_at")
+            result["from_cache"] = True
+            return result
 
     icp_roles   = ", ".join(ex.get("icpRole")   or []) or "Not specified"
     icp_sizes   = ", ".join(ex.get("icpSize")   or []) or "Not specified"
@@ -497,7 +513,7 @@ VISITOR PROFILE:
 - Purchase timeline: {p.get("purchase_timeline") or "Not stated"}
 - Actively sourcing: {"Yes" if p.get("actively_sourcing") else "No"}
 - Specific product interest: {p.get("specific_product") or "Not stated"}
-- LambdaMART match score: {round(float(p.get("match_score") or 0))}/100
+- IEI match score: {round(float(p.get("match_score") or 0))}/100
 - Meeting probability: {round(float(p.get("meeting_prob") or 0)*100)}%
 
 Analyse whether this visitor is genuinely a good meeting candidate for this exhibitor. Consider:
@@ -546,7 +562,21 @@ Return ONLY valid JSON (no markdown, no explanation outside JSON):
             clean = parts[1] if len(parts) > 1 else clean
             if clean.startswith("json"):
                 clean = clean[4:]
-        return json.loads(clean.strip())
+        analysis = json.loads(clean.strip())
+        analysis["from_cache"] = False
+
+        # ── Save to DB ────────────────────────────────────────────────────────
+        if contact_id:
+            try:
+                db = get_db()
+                db.table("audience_contacts").update({
+                    "meeting_match_analysis":    analysis,
+                    "meeting_match_analysed_at": datetime.datetime.utcnow().isoformat(),
+                }).eq("id", contact_id).execute()
+            except Exception as save_err:
+                print(f"Cache save error: {save_err}")
+
+        return analysis
 
     except HTTPException:
         raise
