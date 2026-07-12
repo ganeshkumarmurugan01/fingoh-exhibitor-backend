@@ -260,6 +260,7 @@ def update_targeting(
     intent_fields = {}
     if payload.intent_why is not None: intent_fields["intent_why"] = payload.intent_why
     if payload.intent_buyers is not None: intent_fields["intent_buyers"] = payload.intent_buyers
+    if payload.finetune_notes is not None: intent_fields["finetune_notes"] = payload.finetune_notes
     if payload.intent_signals is not None: intent_fields["intent_signals"] = payload.intent_signals
     if payload.buyer_signals is not None: intent_fields["buyer_signals"] = payload.buyer_signals
     if intent_fields:

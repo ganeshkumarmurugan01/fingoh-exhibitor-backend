@@ -78,6 +78,7 @@ class TargetingUpdate(BaseModel):
     intent_buyers: Optional[str] = None
     intent_signals: Optional[List[dict]] = None
     buyer_signals: Optional[List[dict]] = None
+    finetune_notes: Optional[List[dict]] = None
 
 
 # ── Responses ─────────────────────────────────────────────────────────────────
