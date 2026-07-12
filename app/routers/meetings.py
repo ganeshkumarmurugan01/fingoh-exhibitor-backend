@@ -7,7 +7,8 @@ from app.database import get_db
 from app.routers.audience import apply_onsite_signal
 from pydantic import BaseModel
 from typing import Optional, List
-import os, httpx, secrets, datetime
+import os, httpx, secrets, datetime, json
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
@@ -453,6 +454,97 @@ async def get_meeting_prospects(
     # Sort by match score descending
     results.sort(key=lambda x: x["match_score"], reverse=True)
     return results
+
+
+
+class MatchAnalysisRequest(BaseModel):
+    prospect: dict
+    exhibitor: dict
+
+@router.post("/match-analysis")
+async def match_analysis(
+    payload: MatchAnalysisRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Generate Claude-powered intent match analysis between a prospect and exhibitor ICP."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    p   = payload.prospect
+    ex  = payload.exhibitor
+
+    icp_roles   = ", ".join(ex.get("icpRole")   or []) or "Not specified"
+    icp_sizes   = ", ".join(ex.get("icpSize")   or []) or "Not specified"
+    icp_reasons = ", ".join(ex.get("icpReason") or []) or "Not specified"
+
+    prompt = f"""You are an expert B2B event intelligence system analysing meeting match quality at a trade fair.
+
+EXHIBITOR PROFILE:
+- Company: {ex.get("company", "Unknown")}
+- Event: {ex.get("name", "Unknown")}
+- Target buyer roles: {icp_roles}
+- Target company sizes: {icp_sizes}
+- Visitor intent they want to attract: {icp_reasons}
+
+VISITOR PROFILE:
+- Name: {p.get("name")}
+- Role: {p.get("designation")}
+- Company: {p.get("company")} ({p.get("country")})
+- IEI Score: {p.get("iei_score", 0):.1f} ({p.get("iei_tier", "T3")} tier)
+- Visit reason: {p.get("primary_reason") or "Not stated"}
+- Product categories of interest: {p.get("categories_interest") or "Not specified"}
+- Wants meeting: {"YES - explicitly opted in" if p.get("meeting_interest") in [True, "yes"] else "NO - opted out" if p.get("meeting_interest") in [False, "no"] else "Not specified"}
+- Purchase timeline: {p.get("purchase_timeline") or "Not stated"}
+- Actively sourcing: {"Yes" if p.get("actively_sourcing") else "No"}
+- Specific product interest: {p.get("specific_product") or "Not stated"}
+- LambdaMART match score: {round(p.get("match_score", 0))}/100
+- Meeting probability: {round((p.get("meeting_prob", 0))*100)}%
+
+Analyse whether this visitor is genuinely a good meeting candidate for this exhibitor. Consider:
+1. Does their ROLE match the exhibitor's target buyer roles?
+2. Does their INTENT (visit reason, categories, sourcing status) align with what the exhibitor offers?
+3. Are there RED FLAGS (e.g. wrong department, policy vs procurement, research only, competitor)?
+4. What is the REAL probability of a productive meeting given the intent signals?
+
+Return ONLY valid JSON (no markdown, no explanation outside JSON):
+{{
+  "intentAlignment": "HIGH or MED or LOW",
+  "alignmentSummary": "2-sentence honest assessment of fit between this visitor and exhibitor",
+  "matchFactors": [
+    {{"factor": "string", "assessment": "string", "impact": "POSITIVE or NEUTRAL or NEGATIVE"}}
+  ],
+  "redFlags": ["string"],
+  "talkingPoints": ["string"],
+  "recommendation": "Priority meeting or Worth exploring or Low priority",
+  "recommendationReason": "1-sentence honest recommendation with specific reasoning"
+}}"""
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1000,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(502, f"Claude API error: {resp.text}")
+
+    raw = resp.json()["content"][0]["text"]
+    # Strip markdown fences if any
+    clean = raw.strip()
+    if clean.startswith("```"):
+        clean = clean.split("```")[1]
+        if clean.startswith("json"):
+            clean = clean[4:]
+    return json.loads(clean.strip())
 
 
 @router.post("")
