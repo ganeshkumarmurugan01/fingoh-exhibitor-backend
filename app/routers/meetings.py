@@ -519,32 +519,39 @@ Return ONLY valid JSON (no markdown, no explanation outside JSON):
   "recommendationReason": "1-sentence honest recommendation with specific reasoning"
 }}"""
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1000,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-        )
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 1000,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
+            )
 
-    if resp.status_code != 200:
-        raise HTTPException(502, f"Claude API error: {resp.text}")
+        if resp.status_code != 200:
+            raise HTTPException(502, f"Claude API error {resp.status_code}: {resp.text[:500]}")
 
-    raw = resp.json()["content"][0]["text"]
-    # Strip markdown fences if any
-    clean = raw.strip()
-    if clean.startswith("```"):
-        clean = clean.split("```")[1]
-        if clean.startswith("json"):
-            clean = clean[4:]
-    return json.loads(clean.strip())
+        raw = resp.json()["content"][0]["text"]
+        # Strip markdown fences if any
+        clean = raw.strip()
+        if clean.startswith("```"):
+            parts = clean.split("```")
+            clean = parts[1] if len(parts) > 1 else clean
+            if clean.startswith("json"):
+                clean = clean[4:]
+        return json.loads(clean.strip())
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"match_analysis error: {type(e).__name__}: {str(e)}")
 
 
 @router.post("")
