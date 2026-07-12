@@ -427,17 +427,25 @@ async def get_meeting_prospects(
     results = []
     for c in contacts:
         score_data = match_scores.get(c["id"], {"matchScore": round(c.get("iei_score", 50), 1), "meetingProb": round((c.get("iei_score", 50) or 50) / 100, 3)})
+        raw = c.get("raw_data") or {}
         results.append({
-            "contact_id":    c["id"],
-            "name":          c.get("name", c.get("email", "Unknown")),
-            "designation":   c.get("designation", "—"),
-            "company":       c.get("company", "—"),
-            "country":       c.get("country", "—"),
-            "email":         c.get("email", ""),
-            "iei_score":     c.get("iei_score", 0),
-            "iei_tier":      c.get("iei_tier", "Cool"),
-            "reg_prob":      c.get("reg_prob", 0.5),
-            "match_score":   score_data.get("matchScore", 50),
+            "contact_id":       c["id"],
+            "name":             c.get("name", c.get("email", "Unknown")),
+            "designation":      c.get("designation", "—"),
+            "company":          c.get("company", "—"),
+            "country":          c.get("country", "—"),
+            "email":            c.get("email", ""),
+            "iei_score":        c.get("iei_score", 0),
+            "iei_tier":         c.get("iei_tier", "Cool"),
+            "reg_prob":         c.get("reg_prob", 0.5),
+            "primary_reason":   c.get("primary_reason") or raw.get("primary_reason", ""),
+            "categories_interest": c.get("categories_interest") or raw.get("categories_interest", ""),
+            "meeting_interest": raw.get("wants_meeting") or c.get("meeting_interest"),
+            "purchase_timeline": raw.get("purchase_timeline", ""),
+            "actively_sourcing": raw.get("actively_sourcing", False),
+            "specific_product":  raw.get("specific_product_interest", ""),
+            "company_size":      c.get("company_size", ""),
+            "match_score":      score_data.get("matchScore", 50),
             "meeting_prob":  score_data.get("meetingProb", 0.5),
             "meeting_status": requested.get(c["id"]),
         })
