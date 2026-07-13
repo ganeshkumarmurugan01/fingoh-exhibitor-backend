@@ -108,10 +108,7 @@ def get_agent_queue(event_id: str, current_user: dict = Depends(get_current_user
             outreach_items.append({**base, "agentId": "outreach",
                 "reason": reason_pre or f"IEI score {iei}/100 — high propensity prospect, no outreach yet"})
 
-        if onsite is not None and cid not in completed_meeting:
-            routing_items.append({**base, "agentId": "routing", "ieiScore": onsite or iei,
-                "onsiteTier": onsite_tier,
-                "reason": reason_onsite or f"Onsite IEI {onsite}/100 — active on show floor"})
+        # Routing agent removed — reserved for future agent based on exhibitor feedback
 
         if cid in completed_meeting:
             followup_items.append({**base, "agentId": "followup", "ieiScore": onsite or iei,
@@ -120,7 +117,7 @@ def get_agent_queue(event_id: str, current_user: dict = Depends(get_current_user
     for lst in [outreach_items, routing_items, followup_items]:
         lst.sort(key=lambda x: x["ieiScore"], reverse=True)
 
-    queue = outreach_items[:MAX_PER_BUCKET] + routing_items[:MAX_PER_BUCKET] + followup_items[:MAX_PER_BUCKET]
+    queue = outreach_items[:MAX_PER_BUCKET] + followup_items[:MAX_PER_BUCKET]
 
     drafts_res = db.table("agent_outputs").select("*").eq("event_id", event_id).execute()
     drafts = {}
@@ -151,7 +148,6 @@ def get_agent_queue(event_id: str, current_user: dict = Depends(get_current_user
         "queue": queue,
         "counts": {
             "outreach": len(outreach_items[:MAX_PER_BUCKET]),
-            "routing":  len(routing_items[:MAX_PER_BUCKET]),
             "followup": len(followup_items[:MAX_PER_BUCKET]),
         },
     }
