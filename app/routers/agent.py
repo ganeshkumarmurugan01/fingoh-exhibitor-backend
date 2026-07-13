@@ -104,7 +104,7 @@ def get_agent_queue(event_id: str, current_user: dict = Depends(get_current_user
             "industry": c.get("industry") or "", "ieiScore": iei, "status": "pending",
         }
 
-        if tier in ("T1", "T2") and iei >= 60 and cid not in has_meeting:
+        if tier in ("T1", "T2") and iei >= 40 and cid not in has_meeting:
             outreach_items.append({**base, "agentId": "outreach",
                 "reason": reason_pre or f"IEI score {iei}/100 — high propensity prospect, no outreach yet"})
 
