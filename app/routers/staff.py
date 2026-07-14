@@ -59,13 +59,16 @@ def add_staff(
             detail=f"Staff member with email '{payload.email}' already exists in this organisation.",
         )
 
-    result = db.table("staff").insert({
+    insert_data = {
         "org_id": org_id,
         "name": payload.name,
         "email": str(payload.email),
         "title": payload.title,
         "responsibility": payload.responsibility,
-    }).execute()
+    }
+    if payload.passcode:
+        insert_data["passcode"] = payload.passcode
+    result = db.table("staff").insert(insert_data).execute()
 
     return result.data[0]
 
@@ -81,7 +84,9 @@ def update_staff(
     org_id = get_user_org(current_user["user_id"], db)
     _get_staff_or_404(staff_id, org_id, db)
 
-    update_data = {k: v for k, v in payload.dict().items() if v is not None}
+    update_data = {k: v for k, v in payload.dict().items() if v is not None and k != "passcode"}
+    if payload.passcode is not None:
+        update_data["passcode"] = payload.passcode or None  # allow clearing by passing ""
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
 
@@ -138,7 +143,13 @@ def verify_staff_login(payload: StaffLoginRequest):
             detail="Email not found in the staff roster for this event. Ask your manager to add you in My Team.",
         )
 
-    return {**staff_result.data, "event_id": payload.event_id}
+    staff = staff_result.data
+    stored_passcode = staff.get("passcode")
+    if stored_passcode:
+        if not payload.passcode or payload.passcode.strip() != stored_passcode.strip():
+            raise HTTPException(status_code=401, detail="Incorrect passcode")
+
+    return {**staff, "event_id": payload.event_id, "passcode_required": bool(stored_passcode)}
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────

@@ -56,6 +56,7 @@ class MeetingComplete(BaseModel):
     ai_analysis: Optional[AIAnalysis] = None  # structured, for historic analysis + model retraining
     staff_name: Optional[str] = None          # who completed it, for the onsite signal
     staff_email: Optional[str] = None
+    voice_transcript: Optional[str] = None    # raw voice transcript, stored separately for review
 
 
 async def get_zoho_access_token() -> str:
@@ -225,6 +226,7 @@ def _build_completion_update(payload: MeetingComplete) -> dict:
         "status": "completed",
         "completed_at": datetime.datetime.utcnow().isoformat(),
         "staff_completion_notes": payload.staff_completion_notes,
+        "voice_transcript": payload.voice_transcript,
     }
     if payload.actual_start_time:
         update["actual_start_time"] = payload.actual_start_time

@@ -7,12 +7,14 @@ class StaffCreate(BaseModel):
     email: EmailStr
     title: str = Field(..., min_length=2, max_length=120)
     responsibility: Optional[str] = Field(None, max_length=300)
+    passcode: Optional[str] = Field(None, max_length=20)
 
 
 class StaffUpdate(BaseModel):
     name: Optional[str] = None
     title: Optional[str] = None
     responsibility: Optional[str] = None
+    passcode: Optional[str] = Field(None, max_length=20)
 
 
 class StaffResponse(BaseModel):
@@ -28,6 +30,7 @@ class StaffResponse(BaseModel):
 class StaffLoginRequest(BaseModel):
     email: EmailStr
     event_id: str = Field(..., description="The event the staff member is logging into")
+    passcode: Optional[str] = None
 
 
 class StaffLoginResponse(BaseModel):
@@ -37,3 +40,4 @@ class StaffLoginResponse(BaseModel):
     title: str
     responsibility: Optional[str]
     event_id: str
+    passcode_required: Optional[bool] = False
