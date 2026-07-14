@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.auth import get_current_user, get_user_org
 from app.database import get_db
 from app.routers.audience import apply_onsite_signal
+from app.routers.email_config import get_email_config_for_event, render_email_html
+from app.routers.email_config import get_email_config_for_event, render_email_html
 from pydantic import BaseModel
 from typing import Optional, List
 import os, httpx, secrets, datetime, json
@@ -78,7 +80,10 @@ async def send_meeting_email(
     meeting_details: dict, exhibitor_company: str,
     is_reschedule: bool = False,
 ):
-    """Send meeting request email via Zoho Mail API."""
+    """Send branded meeting request email via Zoho Mail API."""
+    db = get_db()
+    event_id = meeting_details.get("event_id")
+    cfg = get_email_config_for_event(db, event_id) if event_id else {}
     accept_url  = f"{FRONTEND_URL}/meeting?token={accept_token}&action=accept"
     decline_url = f"{FRONTEND_URL}/meeting?token={decline_token}&action=decline"
 
@@ -119,6 +124,14 @@ async def send_meeting_email(
       </div>
     </div>
     """
+
+    # Wrap in branded template if config exists
+    if cfg:
+        html_body = render_email_html(
+            body_html=html_body, config=cfg,
+            visitor_name=to_name,
+            event_name=meeting_details.get("event_name",""),
+        )
 
     try:
         access_token = await get_zoho_access_token()
