@@ -253,11 +253,25 @@ async def agent_send(body: SendRequest, current_user: dict = Depends(get_current
         subject    = parsed.get("email1_subject") or f"Following up — {company}"
         email_body = parsed.get("email1_body") or body.generated_text
 
-    html_body = _build_html_email(exhibitor_name, to_name, email_body)
+    from app.routers.email_config import get_email_config_for_event, render_email_html
+    cfg = get_email_config_for_event(db, body.event_id)
+    # Use branded template if configured, else fallback to old builder
+    if cfg and (cfg.get("logo_url") or cfg.get("signature_name")):
+        html_body = render_email_html(
+            body_html=email_body.replace("\n", "<br>"),
+            config=cfg,
+            visitor_name=to_name,
+            event_name=body.event_id,
+        )
+    else:
+        html_body = _build_html_email(exhibitor_name, to_name, email_body)
 
     from app.routers.meetings import get_zoho_access_token
+    from app.routers.email_config import get_email_config_for_event, render_email_html
     ZOHO_ACCOUNT_ID = os.getenv("ZOHO_ACCOUNT_ID", "670863000000008002")
     ZOHO_FROM_EMAIL = os.getenv("ZOHO_FROM_EMAIL", "noreply@fingoh.ai")
+    db = get_db()
+    cfg = get_email_config_for_event(db, event_id) if event_id else {}
 
     try:
         access_token = await get_zoho_access_token()
