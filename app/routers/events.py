@@ -32,6 +32,44 @@ def list_events(current_user: dict = Depends(get_current_user)):
     return result.data if result.data else []
 
 
+@router.get("/plan-info")
+def get_plan_info(current_user: dict = Depends(get_current_user)):
+    db     = get_db()
+    org_id = get_user_org(current_user["user_id"], db)
+    org_res = db.table("organisations").select("plan, max_events, status, subscription_expires_at").eq("id", org_id).maybe_single().execute()
+    if not org_res or not org_res.data:
+        return {"plan": "trial", "max_events": 1, "active_events": 0, "limit_reached": False}
+    org          = org_res.data
+    plan         = org.get("plan", "trial")
+    max_from_plan = PLAN_EVENT_LIMITS.get(plan, 1)
+    max_events   = org.get("max_events") or max_from_plan
+    active_count = db.table("events").select("id", count="exact").eq("org_id", org_id).neq("status", "archived").execute()
+    active_events = active_count.count or 0
+    return {
+        "plan":                   plan,
+        "max_events":             max_events,
+        "active_events":          active_events,
+        "limit_reached":          active_events >= max_events,
+        "status":                 org.get("status", "active"),
+        "subscription_expires_at": org.get("subscription_expires_at"),
+    }
+
+
+
+PLAN_EVENT_LIMITS = {
+    "trial":             1,
+    "single_event":      1,
+    "event_bundle":      6,
+    "event_portfolio":   15,
+    "annual_self_serve": 999,
+    "annual_enterprise": 999,
+    # legacy names kept for backward compat
+    "starter":           3,
+    "pro":               10,
+    "enterprise":        999,
+}
+
+
 @router.post("", response_model=EventDetailResponse, status_code=201)
 def create_event(
     payload: EventCreate,
@@ -44,6 +82,20 @@ def create_event(
         raise HTTPException(
             status_code=422, detail="date_to must be on or after date_from"
         )
+
+    # Plan enforcement — check active event count vs limit
+    org_res = db.table("organisations").select("plan, max_events").eq("id", org_id).maybe_single().execute()
+    if org_res and org_res.data:
+        org_plan      = org_res.data.get("plan", "trial")
+        max_from_plan = PLAN_EVENT_LIMITS.get(org_plan, 1)
+        max_events    = org_res.data.get("max_events") or max_from_plan
+        active_count  = db.table("events").select("id", count="exact").eq("org_id", org_id).neq("status", "archived").execute()
+        current_count = active_count.count or 0
+        if current_count >= max_events:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Event limit reached. Your {org_plan} plan allows {max_events} active event(s). Archive an existing event or upgrade your plan."
+            )
 
     event_row = {
         "org_id": org_id,

@@ -313,12 +313,11 @@ async def admin_stats(
         "total_users":      profiles.count or 0,
         "total_events":     events.count or 0,
         "total_contacts":   contacts.count or 0,
-        "plans": {
-            "trial":      sum(1 for o in orgs_data if o.get("plan") == "trial"),
-            "starter":    sum(1 for o in orgs_data if o.get("plan") == "starter"),
-            "pro":        sum(1 for o in orgs_data if o.get("plan") == "pro"),
-            "enterprise": sum(1 for o in orgs_data if o.get("plan") == "enterprise"),
-        }
+        "plans": {p: sum(1 for o in orgs_data if o.get("plan") == p) for p in [
+            "trial", "single_event", "event_bundle", "event_portfolio",
+            "annual_self_serve", "annual_enterprise",
+            "starter", "pro", "enterprise",  # legacy
+        ]}
     }
 
 
