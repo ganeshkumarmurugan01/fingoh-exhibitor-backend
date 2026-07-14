@@ -1,12 +1,14 @@
 """
 Fingoh Meeting Requests — endpoints for match scoring, request sending, and status tracking.
 """
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import get_current_user, get_user_org
 from app.database import get_db
 from app.routers.audience import apply_onsite_signal
 from app.routers.email_config import get_email_config_for_event, render_email_html
-from app.routers.email_config import get_email_config_for_event, render_email_html
+
+logger = logging.getLogger("fingoh.meetings")
 from pydantic import BaseModel
 from typing import Optional, List
 import os, httpx, secrets, datetime, json
@@ -137,7 +139,7 @@ async def send_meeting_email(
         access_token = await get_zoho_access_token()
         async with httpx.AsyncClient() as client:
             account_id = ZOHO_ACCOUNT_ID or "670863000000008002"
-            print(f"[EMAIL] Sending to {to_email} from {ZOHO_FROM_EMAIL} via account {account_id}")
+            logger.info("Sending to %s from %s via account %s", to_email, ZOHO_FROM_EMAIL, account_id)
             resp = await client.post(
                 f"https://mail.zoho.com/api/accounts/{account_id}/messages",
                 headers={"Authorization": f"Zoho-oauthtoken {access_token}"},
@@ -149,10 +151,10 @@ async def send_meeting_email(
                     "mailFormat":  "html",
                 }
             )
-            print(f"[EMAIL] Response: {resp.status_code} {resp.text[:300]}")
+            logger.info("Email response: %s %s", resp.status_code, resp.text[:300])
             return resp.status_code == 200
     except Exception as e:
-        print(f"[EMAIL] Send failed: {e}")
+        logger.error("Email send failed: %s", e)
         return False
 
 
@@ -289,7 +291,7 @@ async def _log_meeting_completion_signal(db, meeting_id: str, payload: MeetingCo
             return
         await apply_onsite_signal(db, event_id, contact_res.data, _meeting_signal_payload(payload))
     except Exception as e:
-        print(f"[meetings] onsite signal logging failed: {e}")
+        logger.error("Onsite signal logging failed: %s", e)
 
 
 @router.patch("/staff/{meeting_id}/complete")
@@ -435,7 +437,7 @@ async def get_meeting_prospects(
                         if i < len(scores):
                             match_scores[c["id"]] = scores[i]
         except Exception as e:
-            print(f"Meeting scorer error: {e}")
+            logger.error("Meeting scorer error: %s", e)
 
     # Build response
     results = []
@@ -587,7 +589,7 @@ Return ONLY valid JSON (no markdown, no explanation outside JSON):
                     "meeting_match_analysed_at": datetime.datetime.utcnow().isoformat(),
                 }).eq("id", contact_id).execute()
             except Exception as save_err:
-                print(f"Cache save error: {save_err}")
+                logger.warning("Cache save error: %s", save_err)
 
         return analysis
 

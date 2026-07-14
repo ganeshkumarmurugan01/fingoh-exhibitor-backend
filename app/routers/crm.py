@@ -1,6 +1,7 @@
 """
 Fingoh CRM Integration — Zoho CRM OAuth + contact sync endpoints.
 """
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from app.auth import get_current_user
@@ -8,6 +9,8 @@ from app.routers.audience import _score_batch, _enrich_visitor, _get_event_conte
 from app.database import get_db
 import os, httpx, json
 from typing import Optional
+
+logger = logging.getLogger("fingoh.crm")
 from datetime import datetime, timezone
 
 router = APIRouter(prefix="/crm", tags=["crm"])
@@ -424,7 +427,7 @@ async def push_leads_to_zoho(
                 headers=headers,
                 json={"data": batch, "trigger": ["workflow"]},
             )
-        print(f"[CRM PUSH] Zoho response: {r.status_code} {r.text[:500]}")
+        logger.info("Zoho push response: %s %s", r.status_code, r.text[:500])
         if r.status_code in (200, 201, 207):
             result = r.json()
             pushed += len([d for d in result.get("data", []) if d.get("code") in ("SUCCESS", "DUPLICATE_DATA")])

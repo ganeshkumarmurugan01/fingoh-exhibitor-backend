@@ -1,8 +1,11 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 import csv, io, httpx, os, json, asyncio
 from app.database import get_db
 from app.auth import get_current_user, get_user_org
 from app.routers.utils import log_activity
+
+logger = logging.getLogger("fingoh.audience")
 
 router = APIRouter(prefix="/audience", tags=["audience"])
 
@@ -212,7 +215,7 @@ Rules:
         text = text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         return json.loads(text)
     except Exception as e:
-        print(f"[enrichment] failed for {name}: {e}")
+        logger.error("Enrichment failed for %s: %s", name, e)
         return {}
 
 
@@ -304,7 +307,7 @@ def get_historical_boost(db, email: str, previous_event_id: str) -> dict:
             signals.append("prev_booth_visit")
 
     except Exception as e:
-        print(f"[historical_boost] error for {email}: {e}")
+        logger.error("Historical boost error for %s: %s", email, e)
         return {"boost": 0.0, "signals": [], "returning": False}
 
     final_boost = float(max(-10.0, min(boost, 35.0)))
@@ -779,7 +782,7 @@ async def upload_audience(
                 old_iei = float(score.get("ieiScore", 43))
                 new_iei = round(min(100.0, max(0.0, old_iei + history["boost"])), 2)
                 scored[i] = {**score, "ieiScore": new_iei, "historical": history}
-                print(f"[historical] {email}: {old_iei:.1f} → {new_iei:.1f} (+{history['boost']:.1f}) signals={history['signals']}")
+                logger.debug("Historical boost %s: %.1f → %.1f (+%.1f) signals=%s", email, old_iei, new_iei, history['boost'], history['signals'])
 
     records = [
         {
@@ -1372,7 +1375,7 @@ async def apply_onsite_signal(supabase, event_id: str, contact: dict, payload: d
             "ai_score_delta":       payload.get("ai_score_delta"),
         }).execute()
     except Exception as e:
-        print(f"[log-signal] conversation_signals insert failed: {e}")
+        logger.error("conversation_signals insert failed: %s", e)
 
     return {
         "ok":               True,

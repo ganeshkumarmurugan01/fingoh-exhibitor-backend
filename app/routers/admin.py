@@ -1,6 +1,7 @@
 """
 Fingoh Super Admin — endpoints for managing customers, orgs and subscriptions.
 """
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from app.auth import get_current_user
 from app.database import get_db
@@ -9,6 +10,8 @@ from typing import Optional
 from datetime import datetime, timezone
 import secrets, string
 
+logger = logging.getLogger("fingoh.admin")
+
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
@@ -16,7 +19,7 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 def require_super_admin(current_user: dict = Depends(get_current_user)):
     db = get_db()
-    result = db.table("profiles").select("is_super_admin").eq("id", current_user["user_id"]).single().execute()
+    result = db.table("profiles").select("is_super_admin").eq("id", current_user["user_id"]).maybe_single().execute()
     if not result.data or not result.data.get("is_super_admin"):
         raise HTTPException(403, "Super admin access required")
     return current_user
@@ -105,7 +108,7 @@ async def get_customer(
 ):
     db = get_db()
 
-    org = db.table("organisations").select("*").eq("id", org_id).single().execute()
+    org = db.table("organisations").select("*").eq("id", org_id).maybe_single().execute()
     if not org.data:
         raise HTTPException(404, "Organisation not found")
 
@@ -250,7 +253,7 @@ async def reset_customer_password(
     settings = get_settings()
 
     # Get user for this org
-    profile = db.table("profiles").select("id").eq("org_id", org_id).eq("role", "admin").single().execute()
+    profile = db.table("profiles").select("id").eq("org_id", org_id).eq("role", "admin").maybe_single().execute()
     if not profile.data:
         raise HTTPException(404, "No admin user found for this org")
 
@@ -280,12 +283,12 @@ async def reset_customer_password(
             )
         user_email = ur.json().get("email", "")
         user_name  = profile.data.get("name", "Admin") if profile.data else "Admin"
-        org = db.table("organisations").select("name").eq("id", org_id).single().execute()
+        org = db.table("organisations").select("name").eq("id", org_id).maybe_single().execute()
         company = org.data.get("name", "") if org.data else ""
         if user_email:
             await _send_welcome_email(user_email, user_name, company, new_password)
     except Exception as e:
-        print(f"[admin] Reset email failed: {e}")
+        logger.error("Reset email failed: %s", e)
 
     return {"ok": True, "new_password": new_password}
 
@@ -339,7 +342,7 @@ async def add_user_to_org(
     settings = get_settings()
 
     # Verify org exists
-    org = db.table("organisations").select("id,name").eq("id", org_id).single().execute()
+    org = db.table("organisations").select("id,name").eq("id", org_id).maybe_single().execute()
     if not org.data:
         raise HTTPException(404, "Organisation not found")
 
@@ -465,12 +468,10 @@ async def _send_welcome_email(to_email: str, to_name: str, company: str, passwor
                     "mailFormat":  "html",
                 },
             )
-        print(f"[admin] Email response: {r.status_code} {r.text[:300]}")
+        logger.info("Email response: %s %s", r.status_code, r.text[:300])
         return r.status_code == 200
     except Exception as e:
-        import traceback
-        print(f"[admin] Welcome email failed: {e}")
-        print(traceback.format_exc())
+        logger.exception("Welcome email failed: %s", e)
         return False
 
 

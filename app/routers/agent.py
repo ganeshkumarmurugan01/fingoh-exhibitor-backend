@@ -7,7 +7,10 @@ Fingoh Agent — endpoint that builds a real action queue for the 3 agents:
 
 import os
 import re
+import logging
 import httpx
+
+logger = logging.getLogger("fingoh.agent")
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from app.database import get_db
@@ -299,7 +302,7 @@ async def agent_send(body: SendRequest, current_user: dict = Depends(get_current
                     "content":     html_body,
                 },
             )
-        print(f"[agent/send] Zoho response: {r.status_code} {r.text[:200]}")
+        logger.info("Zoho response: %s %s", r.status_code, r.text[:200])
         if r.status_code not in (200, 201):
             raise HTTPException(status_code=502, detail=f"Zoho error: {r.text[:200]}")
     except HTTPException:

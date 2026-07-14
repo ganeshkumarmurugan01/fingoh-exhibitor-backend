@@ -1,5 +1,8 @@
 """Shared utility functions for routers."""
+import logging
 from app.database import get_db
+
+logger = logging.getLogger("fingoh.activity")
 
 
 def log_activity(db, org_id: str, action: str, description: str, user_id: str = None, metadata: dict = None):
@@ -12,4 +15,4 @@ def log_activity(db, org_id: str, action: str, description: str, user_id: str = 
             "metadata":    metadata or {},
         }).execute()
     except Exception as e:
-        print(f"[activity] Log failed: {e}")
+        logger.error("Log failed: %s", e)

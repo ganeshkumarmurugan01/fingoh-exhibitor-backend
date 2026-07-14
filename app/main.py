@@ -1,6 +1,12 @@
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+)
 from app.routers import onboarding, events, staff
 from app.routers import audience
 from app.routers import meetings
@@ -38,7 +44,6 @@ app.include_router(crm.router, prefix=API_PREFIX)
 app.include_router(admin.router, prefix=API_PREFIX)
 app.include_router(agent.router, prefix=API_PREFIX)
 app.include_router(email_config.router, prefix=API_PREFIX)
-app.include_router(agent.router, prefix=API_PREFIX)
 
 @app.get("/health", tags=["system"])
 def health():

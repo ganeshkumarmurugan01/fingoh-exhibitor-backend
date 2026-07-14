@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import get_current_user, get_user_org
 from app.routers.utils import log_activity
@@ -10,6 +11,8 @@ from app.models.event import (
     TargetingUpdate,
 )
 from typing import List
+
+logger = logging.getLogger("fingoh.events")
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -65,7 +68,7 @@ def create_event(
     try:
         log_activity(db, org_id, "event_created", f"Created event: {payload.name}", current_user["user_id"], {"event_name": payload.name, "event_id": event_id})
     except Exception as e:
-        print(f"[events] Activity log failed: {e}")
+        logger.error("Activity log failed: %s", e)
 
     if payload.categories:
         cats = [{"event_id": event_id, "category": c} for c in payload.categories]
