@@ -255,13 +255,23 @@ async def agent_send(body: SendRequest, current_user: dict = Depends(get_current
 
     from app.routers.email_config import get_email_config_for_event, render_email_html
     cfg = get_email_config_for_event(db, body.event_id)
-    # Use branded template if configured, else fallback to old builder
-    if cfg and (cfg.get("logo_url") or cfg.get("signature_name")):
+    # Check if agent type has an HTML mode template
+    agent_type_map = {"outreach": "outreach", "followup": "followup_day1"}
+    tpl_key = agent_type_map.get(body.agent_id, "outreach")
+    tpl = (cfg.get("templates") or {}).get(tpl_key, {})
+    if tpl.get("mode") == "html" and tpl.get("html_body"):
+        # Use raw HTML template — replace merge tags
+        html_body = tpl["html_body"]
+        for tag, val in [("{{visitor_name}}", to_name), ("{{event_name}}", body.event_id),
+                         ("{{sender_name}}", cfg.get("signature_name") or cfg.get("sender_name") or ""),
+                         ("{{signature_name}}", cfg.get("signature_name") or ""),
+                         ("{{signature_title}}", cfg.get("signature_title") or ""),
+                         ("{{signature_company}}", cfg.get("signature_company") or "")]:
+            html_body = html_body.replace(tag, val or "")
+    elif cfg and (cfg.get("logo_url") or cfg.get("signature_name")):
         html_body = render_email_html(
             body_html=email_body.replace("\n", "<br>"),
-            config=cfg,
-            visitor_name=to_name,
-            event_name=body.event_id,
+            config=cfg, visitor_name=to_name, event_name=body.event_id,
         )
     else:
         html_body = _build_html_email(exhibitor_name, to_name, email_body)
