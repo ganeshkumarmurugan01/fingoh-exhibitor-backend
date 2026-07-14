@@ -144,12 +144,35 @@ def verify_staff_login(payload: StaffLoginRequest):
         )
 
     staff = staff_result.data
-    stored_passcode = staff.get("passcode")
-    if stored_passcode:
-        if not payload.passcode or payload.passcode.strip() != stored_passcode.strip():
-            raise HTTPException(status_code=401, detail="Incorrect passcode")
+    stored_passcode = (staff.get("passcode") or "").strip() or "1234"  # default passcode
+    submitted = (payload.passcode or "").strip()
+    if submitted != stored_passcode:
+        raise HTTPException(status_code=401, detail="Incorrect passcode")
 
-    return {**staff, "event_id": payload.event_id, "passcode_required": bool(stored_passcode)}
+    return {**staff, "event_id": payload.event_id, "passcode_required": True}
+
+
+@router.post("/change-passcode")
+def change_staff_passcode(payload: dict):
+    """Staff App — change passcode after verifying the current one."""
+    from pydantic import BaseModel as _BM
+    staff_id   = payload.get("staff_id")
+    current_pc = (payload.get("current_passcode") or "").strip()
+    new_pc     = (payload.get("new_passcode") or "").strip()
+    if not staff_id or not new_pc or len(new_pc) < 4:
+        raise HTTPException(status_code=400, detail="staff_id and new_passcode (min 4 chars) required")
+
+    db = get_db()
+    staff_res = db.table("staff").select("passcode").eq("id", staff_id).maybe_single().execute()
+    if not staff_res or not staff_res.data:
+        raise HTTPException(status_code=404, detail="Staff not found")
+
+    stored = (staff_res.data.get("passcode") or "").strip() or "1234"
+    if current_pc != stored:
+        raise HTTPException(status_code=401, detail="Current passcode is incorrect")
+
+    db.table("staff").update({"passcode": new_pc}).eq("id", staff_id).execute()
+    return {"ok": True}
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
