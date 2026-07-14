@@ -1,5 +1,6 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
+from pydantic import BaseModel
 import csv, io, httpx, os, json, asyncio
 from app.database import get_db
 from app.auth import get_current_user, get_user_org
@@ -1478,3 +1479,81 @@ async def check_signal(contact_id: str):
             "already_logged": True,
         }
     return {"exists": False, "already_logged": False}
+
+
+# ── GDPR / right-to-erasure ───────────────────────────────────────────────────
+
+class ErasureRequest(BaseModel):
+    email: str
+    reason: str = "gdpr_erasure"
+
+
+@router.delete("/erase")
+async def erase_contact(
+    payload: ErasureRequest,
+    current_user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """
+    Permanently delete all personal data for a visitor email across every table.
+    Satisfies GDPR Article 17 (right to erasure) and PDPC erasure obligations.
+    The org can only erase contacts that belong to their own events.
+    """
+    org_id = get_user_org(current_user["user_id"], db)
+    email  = payload.email.strip().lower()
+
+    # Resolve contact IDs that belong to this org's events
+    contacts_res = (
+        db.table("audience_contacts")
+        .select("id, event_id")
+        .eq("email", email)
+        .execute()
+    )
+    contacts = contacts_res.data or []
+
+    if not contacts:
+        raise HTTPException(404, "No contact found with that email")
+
+    # Verify all contacts belong to events owned by this org
+    event_ids = list({c["event_id"] for c in contacts})
+    events_res = (
+        db.table("events")
+        .select("id")
+        .in_("id", event_ids)
+        .eq("org_id", org_id)
+        .execute()
+    )
+    allowed_event_ids = {e["id"] for e in (events_res.data or [])}
+    contact_ids = [c["id"] for c in contacts if c["event_id"] in allowed_event_ids]
+
+    if not contact_ids:
+        raise HTTPException(403, "No contacts found for your organisation")
+
+    # Delete all related data in dependency order
+    db.table("conversation_signals").delete().in_("contact_id", contact_ids).execute()
+    db.table("agent_outputs").delete().in_("contact_id", contact_ids).execute()
+
+    meeting_res = db.table("meeting_requests").select("id").in_("contact_id", contact_ids).execute()
+    meeting_ids = [m["id"] for m in (meeting_res.data or [])]
+    if meeting_ids:
+        db.table("meeting_tokens").delete().in_("meeting_id", meeting_ids).execute()
+        db.table("meeting_requests").delete().in_("id", meeting_ids).execute()
+
+    db.table("audience_contacts").delete().in_("id", contact_ids).execute()
+
+    log_activity(
+        db, org_id,
+        action="gdpr_erasure",
+        description=f"Erased all data for {email} — {len(contact_ids)} contact record(s) deleted",
+        user_id=current_user["user_id"],
+        metadata={"email": email, "contact_ids": contact_ids, "reason": payload.reason},
+    )
+
+    logger.info("GDPR erasure: %s erased %s (%d records)", org_id, email, len(contact_ids))
+
+    return {
+        "ok": True,
+        "email": email,
+        "records_deleted": len(contact_ids),
+        "message": f"All personal data for {email} has been permanently deleted.",
+    }
