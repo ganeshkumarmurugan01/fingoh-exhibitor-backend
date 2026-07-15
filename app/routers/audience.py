@@ -1358,6 +1358,7 @@ async def apply_onsite_signal(supabase, event_id: str, contact: dict, payload: d
         supabase.table("conversation_signals").insert({
             "contact_id":           contact["id"],
             "event_id":             event_id,
+            "contact_name":         contact.get("name") or contact.get("email", ""),
             "staff_name":           payload.get("staff_name", "Staff"),
             "staff_email":          payload.get("staff_email", ""),
             "conversation_quality": int(payload.get("conversation_quality") or payload.get("conv_quality") or 0),
