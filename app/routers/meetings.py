@@ -334,8 +334,19 @@ async def get_meeting_prospects(
         return []
 
     # Get existing meeting requests to mark already-requested contacts
-    meetings_res = db.table("meeting_requests").select("contact_id, status").eq("event_id", event_id).execute()
-    requested = {m["contact_id"]: m["status"] for m in (meetings_res.data or [])}
+    meetings_res = db.table("meeting_requests").select(
+        "id, contact_id, status, proposed_datetime, completed_at, actual_start_time, actual_end_time, duration_minutes, location, topic, staff_completion_notes, ai_analysis"
+    ).eq("event_id", event_id).execute()
+    requested = {}
+    meeting_details = {}
+    for m in (meetings_res.data or []):
+        cid = m["contact_id"]
+        # Keep the most recent / highest-priority meeting per contact
+        existing = requested.get(cid)
+        priority = {"accepted": 4, "pending": 3, "completed": 2, "declined": 1, "cancelled": 0}
+        if existing is None or priority.get(m["status"], 0) > priority.get(existing, 0):
+            requested[cid] = m["status"]
+            meeting_details[cid] = m
 
     # Score contacts using IEI-based features
     def derive_features(c):
@@ -468,6 +479,7 @@ async def get_meeting_prospects(
             "match_score":      score_data.get("matchScore", 50),
             "meeting_prob":  score_data.get("meetingProb", 0.5),
             "meeting_status": requested.get(c["id"]),
+            "meeting":        meeting_details.get(c["id"]),
         })
 
     # Sort by match score descending
