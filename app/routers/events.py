@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from app.auth import get_current_user, get_user_org
 from app.routers.utils import log_activity
 from app.database import get_db
@@ -285,6 +285,7 @@ def update_event(
 def update_targeting(
     event_id: str,
     payload: TargetingUpdate,
+    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
 ):
     """Update categories, ICP, and exhibitor intent — upserts into related tables."""
@@ -304,12 +305,14 @@ def update_targeting(
     if payload.icp_roles is not None: icp_fields["roles"] = payload.icp_roles
     if payload.icp_company_sizes is not None: icp_fields["company_sizes"] = payload.icp_company_sizes
     if payload.icp_visit_reasons is not None: icp_fields["visit_reasons"] = payload.icp_visit_reasons
+    icp_changed = False
     if icp_fields:
         existing_icp = db.table("event_icp").select("id").eq("event_id", event_id).execute()
         if existing_icp.data:
             db.table("event_icp").update(icp_fields).eq("event_id", event_id).execute()
         else:
             db.table("event_icp").insert({"event_id": event_id, **icp_fields}).execute()
+        icp_changed = True
 
     # Intent — upsert
     intent_fields = {}
@@ -324,6 +327,11 @@ def update_targeting(
             db.table("event_intent").update(intent_fields).eq("event_id", event_id).execute()
         else:
             db.table("event_intent").insert({"event_id": event_id, **intent_fields}).execute()
+
+    if icp_changed:
+        from app.routers.audience import rescore_all
+        background_tasks.add_task(rescore_all, event_id)
+        logger.info("ICP changed for event %s — rescoring contacts in background", event_id)
 
     return _build_event_detail(event, db)
 
