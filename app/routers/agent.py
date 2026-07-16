@@ -315,3 +315,47 @@ async def agent_send(body: SendRequest, current_user: dict = Depends(get_current
         .eq("agent_id", body.agent_id).execute()
 
     return {"status": "sent", "to": to_email, "subject": subject}
+
+
+# ── Claude proxy endpoints (keep API key server-side) ─────────────────────────
+
+class AIRecommendRequest(BaseModel):
+    prompt: str
+    max_tokens: int = 200
+
+class ConvAnalysisRequest(BaseModel):
+    prompt: str
+    max_tokens: int = 500
+
+@router.post("/ai/recommend")
+async def ai_recommend(body: AIRecommendRequest, current_user: dict = Depends(get_current_user)):
+    """Proxy: visitor next-step recommendation for exhibitor sales team."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="AI not configured")
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": body.max_tokens,
+                  "messages": [{"role": "user", "content": body.prompt}]},
+        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail="AI request failed")
+    return {"text": r.json()["content"][0]["text"]}
+
+
+@router.post("/ai/analyse")
+async def ai_analyse(body: ConvAnalysisRequest, current_user: dict = Depends(get_current_user)):
+    """Proxy: conversation analysis / missing signals for a visitor."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="AI not configured")
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": body.max_tokens,
+                  "messages": [{"role": "user", "content": body.prompt}]},
+        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail="AI request failed")
+    return {"text": r.json()["content"][0]["text"]}
