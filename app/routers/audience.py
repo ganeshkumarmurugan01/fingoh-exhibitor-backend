@@ -342,46 +342,55 @@ async def rescore_all(
     # Always fetch fresh ICP context — this is the key step
     event_ctx = _get_event_context(db, event_id)
 
-    def _rule_based_iei(icp_fit: float, c: dict) -> tuple[float, str]:
+    def _rule_based_iei(icp_fit: float, row: dict) -> tuple[float, str]:
         """Fallback when Modal is unavailable — weighted rule formula."""
         raw = (
-            icp_fit                                      * 0.50 +
-            float(c.get("seniority_score") or 0.5)      * 0.15 +
-            float(c.get("buying_cycle_stage") or 0.0)   * 0.10 +
-            float(c.get("profile_completeness") or 0.5) * 0.10 +
-            max(float(c.get("previous_event_history") or 0.0),
-                float(c.get("trigger_event_score") or 0.0)) * 0.15
+            icp_fit                                           * 0.50 +
+            float(row.get("seniority_score") or 0.5)         * 0.15 +
+            float(row.get("buying_cycle_stage") or 0.0)      * 0.10 +
+            float(row.get("profile_completeness") or 0.5)    * 0.10 +
+            max(float(row.get("previous_event_history") or 0.0),
+                float(row.get("trigger_event_score") or 0.0)) * 0.15
         )
         iei = round(min(100.0, max(0.0, raw * 100)), 1)
         tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
         return iei, tier
 
     # Build rows with freshly computed icp_fit_score
+    # Signal fields live inside raw_data, not as top-level columns
     rows = []
     for c in contacts:
+        rd = c.get("raw_data") or {}  # enrichment signals are stored here
+
+        def _f(key, default=0.0):
+            v = c.get(key) if c.get(key) is not None else rd.get(key)
+            try: return float(v or default)
+            except: return default
+
+        company_size = c.get("company_size") or rd.get("company_size") or ""
         icp_fit = compute_icp_fit(
-            c.get("designation") or "",
-            c.get("company_size") or "",
+            c.get("designation") or rd.get("job_title") or "",
+            company_size,
             event_ctx,
         )
         rows.append({
             "id":                       c.get("id"),
             "name":                     c.get("name"),
-            "designation":              c.get("designation"),
-            "job_title":                c.get("designation"),
+            "designation":              c.get("designation") or rd.get("job_title") or "",
+            "job_title":                c.get("designation") or rd.get("job_title") or "",
             "company":                  c.get("company"),
-            "industry":                 c.get("industry"),
-            "icp_fit_score":            icp_fit,           # freshly computed
-            "company_size_match":       float(c.get("company_size_match") or 0.5),
-            "buying_cycle_stage":       float(c.get("buying_cycle_stage") or 0.0),
-            "trigger_event_score":      float(c.get("trigger_event_score") or 0.0),
-            "competitive_displacement": float(c.get("competitive_displacement") or 0.0),
-            "seniority_score":          float(c.get("seniority_score") or 0.0),
-            "tech_stack_compatibility": float(c.get("tech_stack_compatibility") or 0.0),
-            "previous_event_history":   float(c.get("previous_event_history") or 0.0),
-            "profile_completeness":     float(c.get("profile_completeness") or 0.5),
-            "categories_specificity":   float(c.get("categories_specificity") or 0.0),
-            "_contact":                 c,                 # carry original for fallback
+            "industry":                 c.get("industry") or rd.get("industry") or "",
+            "icp_fit_score":            icp_fit,
+            "company_size_match":       _f("company_size_match", 0.5),
+            "buying_cycle_stage":       _f("buying_cycle_stage"),
+            "trigger_event_score":      _f("trigger_event_score"),
+            "competitive_displacement": _f("competitive_displacement"),
+            "seniority_score":          _f("seniority_score"),
+            "tech_stack_compatibility": _f("tech_stack_compatibility"),
+            "previous_event_history":   _f("previous_event_history"),
+            "profile_completeness":     _f("profile_completeness", 0.5),
+            "categories_specificity":   _f("categories_specificity"),
+            "_contact":                 c,
         })
 
     # Try XGBoost via Modal; fall back to rule-based if unavailable
@@ -408,7 +417,7 @@ async def rescore_all(
             iei  = float(scores[idx].get("ieiScore", 50))
             tier = scores[idx].get("ieiTier", "T2")
         else:
-            iei, tier = _rule_based_iei(icp_fit, c)
+            iei, tier = _rule_based_iei(icp_fit, row)
 
         db.table("audience_contacts").update({
             "icp_fit_score": icp_fit,
