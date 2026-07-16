@@ -415,14 +415,13 @@ async def rescore_all(
 
         if use_modal and idx < len(scores):
             iei  = float(scores[idx].get("ieiScore", 50))
-            tier = scores[idx].get("ieiTier", "T2")
         else:
-            iei, tier = _rule_based_iei(icp_fit, row)
+            iei, _ = _rule_based_iei(icp_fit, row)
 
+        tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
         db.table("audience_contacts").update({
             "icp_fit_score": icp_fit,
             "iei_score":     iei,
-            "iei_tier":      tier,
         }).eq("id", c["id"]).execute()
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
         updated += 1
