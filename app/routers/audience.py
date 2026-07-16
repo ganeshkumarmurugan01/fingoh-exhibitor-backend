@@ -326,76 +326,106 @@ def get_historical_boost(db, email: str, previous_event_id: str) -> dict:
 async def rescore_all(
     event_id: str,
 ):
-    """Rescore all contacts in an event with the latest Modal model."""
+    """
+    Rescore all contacts for an event using the latest ICP definition.
+    Freshly computes icp_fit_score from the current ICP, then passes all
+    features to the XGBoost scorer on Modal (falls back to rule-based if
+    Modal is unavailable so scores still update).
+    """
     db = get_db()
 
-    # Fetch all contacts
     res = db.table("audience_contacts").select("*").eq("event_id", event_id).execute()
     contacts = res.data or []
     if not contacts:
         return {"rescored": 0, "message": "No contacts found"}
 
-    # Fetch event context for ICP scoring
+    # Always fetch fresh ICP context — this is the key step
     event_ctx = _get_event_context(db, event_id)
 
-    # Build visitor payloads
+    def _rule_based_iei(icp_fit: float, c: dict) -> tuple[float, str]:
+        """Fallback when Modal is unavailable — weighted rule formula."""
+        raw = (
+            icp_fit                                      * 0.50 +
+            float(c.get("seniority_score") or 0.5)      * 0.15 +
+            float(c.get("buying_cycle_stage") or 0.0)   * 0.10 +
+            float(c.get("profile_completeness") or 0.5) * 0.10 +
+            max(float(c.get("previous_event_history") or 0.0),
+                float(c.get("trigger_event_score") or 0.0)) * 0.15
+        )
+        iei = round(min(100.0, max(0.0, raw * 100)), 1)
+        tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
+        return iei, tier
+
+    # Build rows with freshly computed icp_fit_score
     rows = []
     for c in contacts:
+        icp_fit = compute_icp_fit(
+            c.get("designation") or "",
+            c.get("company_size") or "",
+            event_ctx,
+        )
         rows.append({
-            "id":                    c.get("id"),
-            "name":                  c.get("name"),
-            "designation":           c.get("designation"),
-            "job_title":             c.get("designation"),
-            "company":               c.get("company"),
-            "industry":              c.get("industry"),
-            "icp_fit_score":         compute_icp_fit(
-                                         c.get("designation") or "",
-                                         c.get("company_size") or "",
-                                         event_ctx,
-                                     ),
-            "company_size_match":    float(c.get("company_size_match") or 0.5),
-            "buying_cycle_stage":    float(c.get("buying_cycle_stage") or 0.0),
-            "trigger_event_score":   float(c.get("trigger_event_score") or 0.0),
+            "id":                       c.get("id"),
+            "name":                     c.get("name"),
+            "designation":              c.get("designation"),
+            "job_title":                c.get("designation"),
+            "company":                  c.get("company"),
+            "industry":                 c.get("industry"),
+            "icp_fit_score":            icp_fit,           # freshly computed
+            "company_size_match":       float(c.get("company_size_match") or 0.5),
+            "buying_cycle_stage":       float(c.get("buying_cycle_stage") or 0.0),
+            "trigger_event_score":      float(c.get("trigger_event_score") or 0.0),
             "competitive_displacement": float(c.get("competitive_displacement") or 0.0),
-            "seniority_score":       float(c.get("seniority_score") or 0.0),
+            "seniority_score":          float(c.get("seniority_score") or 0.0),
             "tech_stack_compatibility": float(c.get("tech_stack_compatibility") or 0.0),
-            "previous_event_history":float(c.get("previous_event_history") or 0.0),
-            "profile_completeness":  float(c.get("profile_completeness") or 0.5),
-            "categories_specificity":float(c.get("categories_specificity") or 0.0),
+            "previous_event_history":   float(c.get("previous_event_history") or 0.0),
+            "profile_completeness":     float(c.get("profile_completeness") or 0.5),
+            "categories_specificity":   float(c.get("categories_specificity") or 0.0),
+            "_contact":                 c,                 # carry original for fallback
         })
 
-    # Score in batches of 20
+    # Try XGBoost via Modal; fall back to rule-based if unavailable
+    use_modal = bool(MODAL_SCORER_URL)
     BATCH = 20
     scores = []
-    for i in range(0, len(rows), BATCH):
-        batch_scores = await _score_batch(rows[i:i+BATCH])
-        scores.extend(batch_scores)
+    if use_modal:
+        try:
+            modal_rows = [{k: v for k, v in r.items() if k != "_contact"} for r in rows]
+            for i in range(0, len(modal_rows), BATCH):
+                batch_scores = await _score_batch(modal_rows[i:i+BATCH])
+                scores.extend(batch_scores)
+        except Exception as e:
+            logger.warning("Modal scorer failed during rescore_all, falling back: %s", e)
+            use_modal = False
 
-    # Update each contact
     updated = 0
-    for contact, score in zip(contacts, scores):
-        iei   = float(score.get("ieiScore", 50))
-        reg   = float(score.get("regProb",  0.5))
-        tier  = score.get("ieiTier", "T2")
+    tier_counts: dict = {}
+    for idx, c in enumerate(contacts):
+        row = rows[idx]
+        icp_fit = row["icp_fit_score"]
+
+        if use_modal and idx < len(scores):
+            iei  = float(scores[idx].get("ieiScore", 50))
+            tier = scores[idx].get("ieiTier", "T2")
+        else:
+            iei, tier = _rule_based_iei(icp_fit, c)
+
         db.table("audience_contacts").update({
-            "iei_score":  iei,
-            "reg_prob":   reg,
-            "iei_tier":   tier,
-            "historical_signals": score.get("historical", {}).get("signals") or None,
-        }).eq("id", contact["id"]).execute()
+            "icp_fit_score": icp_fit,
+            "iei_score":     iei,
+            "iei_tier":      tier,
+        }).eq("id", c["id"]).execute()
+        tier_counts[tier] = tier_counts.get(tier, 0) + 1
         updated += 1
 
-    # Tier distribution summary
-    tier_counts = {}
-    for s in scores:
-        t = s.get("ieiTier", "T2")
-        tier_counts[t] = tier_counts.get(t, 0) + 1
-
+    method = "XGBoost+Modal" if use_modal else "rule-based fallback"
+    logger.info("rescore_all: event=%s rescored=%d method=%s tiers=%s", event_id, updated, method, tier_counts)
     return {
-        "rescored":   updated,
-        "event_id":   event_id,
+        "rescored":          updated,
+        "event_id":          event_id,
         "tier_distribution": tier_counts,
-        "message":    f"✓ Rescored {updated} contacts with v6 model",
+        "method":            method,
+        "message":           f"✓ Rescored {updated} contacts via {method}",
     }
 
 
