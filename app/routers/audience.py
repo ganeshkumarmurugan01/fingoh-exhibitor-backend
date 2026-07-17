@@ -850,6 +850,33 @@ async def upload_audience(
     return {"uploaded": len(records), "event_id": event_id}
 
 
+@router.get("/contacts/{event_id}/{contact_id}")
+async def get_contact_profile(
+    event_id: str,
+    contact_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Full visitor profile — contact details, signals, meetings, history."""
+    db = get_db()
+    org_id = get_user_org(current_user["user_id"], db)
+    ev = db.table("events").select("org_id").eq("id", event_id).eq("org_id", org_id).maybe_single().execute()
+    if not ev or not ev.data:
+        raise HTTPException(status_code=403, detail="Not authorised")
+
+    contact = db.table("audience_contacts").select("*").eq("id", contact_id).eq("event_id", event_id).maybe_single().execute()
+    if not contact or not contact.data:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    signals = db.table("conversation_signals").select("*").eq("contact_id", contact_id).eq("event_id", event_id).order("created_at", desc=True).execute()
+    meetings = db.table("meeting_requests").select("*").eq("contact_id", contact_id).eq("event_id", event_id).order("created_at", desc=True).execute()
+
+    return {
+        "contact":  contact.data,
+        "signals":  signals.data or [],
+        "meetings": meetings.data or [],
+    }
+
+
 @router.get("/contacts/{event_id}")
 async def list_contacts(
     event_id: str,
@@ -1525,6 +1552,31 @@ async def check_signal(contact_id: str):
 class ErasureRequest(BaseModel):
     email: str
     reason: str = "gdpr_erasure"
+
+
+@router.delete("/contacts/{event_id}/{contact_id}")
+async def delete_contact(
+    event_id: str,
+    contact_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a single contact and all related data for this event."""
+    db = get_db()
+    org_id = get_user_org(current_user["user_id"], db)
+
+    # Verify contact belongs to this org's event
+    ev = db.table("events").select("org_id").eq("id", event_id).eq("org_id", org_id).maybe_single().execute()
+    if not ev or not ev.data:
+        raise HTTPException(status_code=403, detail="Not authorised")
+
+    db.table("conversation_signals").delete().eq("contact_id", contact_id).eq("event_id", event_id).execute()
+    db.table("agent_outputs").delete().eq("contact_id", contact_id).eq("event_id", event_id).execute()
+    meeting_ids = [m["id"] for m in (db.table("meeting_requests").select("id").eq("contact_id", contact_id).eq("event_id", event_id).execute().data or [])]
+    if meeting_ids:
+        db.table("meeting_requests").delete().in_("id", meeting_ids).execute()
+    db.table("audience_contacts").delete().eq("id", contact_id).eq("event_id", event_id).execute()
+
+    return {"ok": True, "deleted": contact_id}
 
 
 @router.delete("/erase")
