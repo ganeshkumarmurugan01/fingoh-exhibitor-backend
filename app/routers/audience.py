@@ -1596,3 +1596,148 @@ async def erase_contact(
         "records_deleted": len(contact_ids),
         "message": f"All personal data for {email} has been permanently deleted.",
     }
+
+
+# ── Walk-in visitor endpoints ─────────────────────────────────────────────────
+
+class ScanCardRequest(BaseModel):
+    image_base64: str          # base64-encoded JPEG/PNG
+    event_id: str
+
+class WalkInSaveRequest(BaseModel):
+    event_id:    str
+    staff_id:    str
+    name:        str
+    email:       str = ""
+    company:     str = ""
+    designation: str = ""
+    phone:       str = ""
+    city:        str = ""
+    country:     str = ""
+    notes:       str = ""
+
+@router.post("/scan-card")
+async def scan_card(payload: ScanCardRequest):
+    """
+    Staff App — OCR a business card image via Claude Vision.
+    Returns structured contact fields; does NOT save anything yet.
+    """
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="AI not configured")
+
+    # Strip data-URL prefix if present
+    b64 = payload.image_base64
+    if "," in b64:
+        b64 = b64.split(",", 1)[1]
+
+    prompt = """Extract all contact information from this business card image.
+Return ONLY a JSON object with these exact keys (use empty string if not found):
+{
+  "name": "",
+  "company": "",
+  "designation": "",
+  "email": "",
+  "phone": "",
+  "city": "",
+  "country": "",
+  "website": ""
+}
+No explanation, no markdown, just the JSON object."""
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 300,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}},
+                        {"type": "text",  "text": prompt},
+                    ],
+                }],
+            },
+        )
+
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail="Card scan failed")
+
+    text = r.json()["content"][0]["text"].strip()
+    # Strip markdown fences if Claude wraps it
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    try:
+        data = json.loads(text)
+    except Exception:
+        data = {}
+
+    return {"ok": True, "contact": data}
+
+
+@router.post("/walk-in")
+async def save_walk_in(payload: WalkInSaveRequest):
+    """
+    Staff App — save a walk-in visitor captured on the floor.
+    Creates (or finds) the contact and logs a walk_in conversation signal.
+    No auth required — staff_id is the identifier.
+    """
+    db = get_db()
+
+    # Resolve event → org
+    ev = db.table("events").select("org_id").eq("id", payload.event_id).maybe_single().execute()
+    if not ev or not ev.data:
+        raise HTTPException(status_code=404, detail="Event not found")
+    org_id = ev.data["org_id"]
+
+    # Find or create contact
+    existing = None
+    if payload.email:
+        res = db.table("audience_contacts")\
+            .select("id")\
+            .eq("event_id", payload.event_id)\
+            .eq("email", payload.email)\
+            .maybe_single().execute()
+        existing = res.data if res else None
+
+    if existing:
+        contact_id = existing["id"]
+    else:
+        ins = db.table("audience_contacts").insert({
+            "event_id":    payload.event_id,
+            "name":        payload.name,
+            "email":       payload.email or f"walkin_{payload.event_id[:8]}_{payload.name.replace(' ','_').lower()}@unknown",
+            "company":     payload.company,
+            "designation": payload.designation,
+            "phone":       payload.phone,
+            "city":        payload.city,
+            "country":     payload.country,
+            "iei_score":   30.0,
+            "iei_tier":    "T3",
+            "source":      "walk_in",
+        }).execute()
+        contact_id = ins.data[0]["id"]
+
+    # Resolve staff name
+    staff_res = db.table("staff").select("name").eq("id", payload.staff_id).maybe_single().execute()
+    staff_name = staff_res.data.get("name", "Staff") if staff_res and staff_res.data else "Staff"
+
+    # Log walk_in signal
+    db.table("conversation_signals").insert({
+        "contact_id":    contact_id,
+        "event_id":      payload.event_id,
+        "staff_id":      payload.staff_id,
+        "contact_name":  payload.name,
+        "signal_type":   "walk_in",
+        "notes":         payload.notes or f"Walk-in captured by {staff_name}",
+        "conversation_quality": 3,
+    }).execute()
+
+    return {"ok": True, "contact_id": contact_id, "created": not bool(existing)}
