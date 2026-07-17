@@ -1720,7 +1720,6 @@ async def save_walk_in(payload: WalkInSaveRequest):
             "city":        payload.city,
             "country":     payload.country,
             "iei_score":   30.0,
-            "iei_tier":    "T3",
             "source":      "walk_in",
         }).execute()
         contact_id = ins.data[0]["id"]
