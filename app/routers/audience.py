@@ -1708,7 +1708,10 @@ async def save_walk_in(payload: WalkInSaveRequest):
         existing = res.data if res else None
 
     if existing:
-        contact_id = existing["id"]
+        raise HTTPException(
+            status_code=409,
+            detail=f"{payload.name or 'This visitor'} ({payload.email}) is already in the system. Find them in the Prospect list instead."
+        )
     else:
         ins = db.table("audience_contacts").insert({
             "event_id":    payload.event_id,
