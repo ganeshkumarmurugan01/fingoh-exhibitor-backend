@@ -771,6 +771,25 @@ def check_email_registered(event_id: str, email: str):
 
 
 # ── Upload endpoint ───────────────────────────────────────────────────────────
+
+def _get_plan_limits(db, org_id: str) -> dict:
+    """Return max_contacts_per_event and max_deep_iei_per_event for an org's plan."""
+    from app.routers.admin import _DEFAULT_PLAN_CONFIGS
+    org = db.table("organisations").select("plan").eq("id", org_id).maybe_single().execute()
+    plan_id = (org.data.get("plan") if org and org.data else None) or "trial"
+    try:
+        res = db.table("plan_configs").select("max_contacts_per_event,max_deep_iei_per_event").eq("plan_id", plan_id).maybe_single().execute()
+        if res and res.data:
+            return {"max_contacts": res.data.get("max_contacts_per_event", 500),
+                    "max_deep_iei": res.data.get("max_deep_iei_per_event", 50)}
+    except Exception:
+        pass
+    # Fallback to defaults
+    defaults = {c["plan_id"]: c for c in _DEFAULT_PLAN_CONFIGS}
+    cfg = defaults.get(plan_id, defaults["trial"])
+    return {"max_contacts": cfg["max_contacts_per_event"], "max_deep_iei": cfg["max_deep_iei_per_event"]}
+
+
 @router.post("/upload/{event_id}")
 async def upload_audience(
     event_id: str,
@@ -788,6 +807,23 @@ async def upload_audience(
 
     if not rows:
         raise HTTPException(400, "Empty CSV")
+
+    # ── Enforce contact cap for this org's plan ──────────────────────────────
+    from app.auth import get_user_org
+    org_id = get_user_org(current_user["user_id"], supabase)
+    limits = _get_plan_limits(supabase, org_id)
+    max_contacts = limits["max_contacts"]
+
+    existing_count_res = supabase.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).execute()
+    existing_count = existing_count_res.count or 0
+    remaining = max_contacts - existing_count
+
+    if remaining <= 0:
+        raise HTTPException(403, f"Contact limit reached. Your plan allows {max_contacts} contacts per event. This event already has {existing_count}.")
+
+    if len(rows) > remaining:
+        rows = rows[:remaining]
+        logger.warning("Upload truncated to %d rows (plan limit %d, existing %d)", remaining, max_contacts, existing_count)
 
     # Fetch exhibitor context for this event
     event_ctx = _get_event_context(supabase, event_id)
@@ -847,7 +883,13 @@ async def upload_audience(
     ).execute()
 
     log_activity(get_db(), get_user_org(current_user["user_id"], get_db()), "contacts_uploaded", f"Uploaded {len(records)} contacts", current_user["user_id"], {"count": len(records), "event_id": event_id})
-    return {"uploaded": len(records), "event_id": event_id}
+    return {
+        "uploaded":    len(records),
+        "event_id":    event_id,
+        "plan_limit":  max_contacts,
+        "used_after":  existing_count + len(records),
+        "truncated":   len(rows) < (existing_count + len(records)),  # True if we cut rows
+    }
 
 
 @router.get("/contacts/{event_id}/{contact_id}")
