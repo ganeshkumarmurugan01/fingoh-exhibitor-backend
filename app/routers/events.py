@@ -32,6 +32,15 @@ def list_events(current_user: dict = Depends(get_current_user)):
     return result.data if result.data else []
 
 
+def _get_extra_events(db, org_id: str) -> int:
+    """Sum extra_events add-ons for this org."""
+    try:
+        res = db.table("org_addons").select("quantity").eq("org_id", org_id).eq("addon_type", "extra_events").execute()
+        return sum(r["quantity"] for r in (res.data or []))
+    except Exception:
+        return 0
+
+
 @router.get("/plan-info")
 def get_plan_info(current_user: dict = Depends(get_current_user)):
     db     = get_db()
@@ -39,18 +48,22 @@ def get_plan_info(current_user: dict = Depends(get_current_user)):
     org_res = db.table("organisations").select("plan, max_events, status, subscription_expires_at").eq("id", org_id).maybe_single().execute()
     if not org_res or not org_res.data:
         return {"plan": "trial", "max_events": 1, "active_events": 0, "limit_reached": False}
-    org          = org_res.data
-    plan         = org.get("plan", "trial")
+    org           = org_res.data
+    plan          = org.get("plan", "trial")
     max_from_plan = PLAN_EVENT_LIMITS.get(plan, 1)
-    max_events   = org.get("max_events") or max_from_plan
-    active_count = db.table("events").select("id", count="exact").eq("org_id", org_id).neq("status", "archived").execute()
+    base_max      = org.get("max_events") or max_from_plan
+    extra_events  = _get_extra_events(db, org_id)
+    max_events    = base_max + extra_events
+    active_count  = db.table("events").select("id", count="exact").eq("org_id", org_id).neq("status", "archived").execute()
     active_events = active_count.count or 0
     return {
-        "plan":                   plan,
-        "max_events":             max_events,
-        "active_events":          active_events,
-        "limit_reached":          active_events >= max_events,
-        "status":                 org.get("status", "active"),
+        "plan":                    plan,
+        "max_events":              max_events,
+        "base_max_events":         base_max,
+        "extra_events":            extra_events,
+        "active_events":           active_events,
+        "limit_reached":           active_events >= max_events,
+        "status":                  org.get("status", "active"),
         "subscription_expires_at": org.get("subscription_expires_at"),
     }
 
@@ -83,18 +96,20 @@ def create_event(
             status_code=422, detail="date_to must be on or after date_from"
         )
 
-    # Plan enforcement — check active event count vs limit
+    # Plan enforcement — check active event count vs limit (including add-ons)
     org_res = db.table("organisations").select("plan, max_events").eq("id", org_id).maybe_single().execute()
     if org_res and org_res.data:
         org_plan      = org_res.data.get("plan", "trial")
         max_from_plan = PLAN_EVENT_LIMITS.get(org_plan, 1)
-        max_events    = org_res.data.get("max_events") or max_from_plan
+        base_max      = org_res.data.get("max_events") or max_from_plan
+        extra_events  = _get_extra_events(db, org_id)
+        max_events    = base_max + extra_events
         active_count  = db.table("events").select("id", count="exact").eq("org_id", org_id).neq("status", "archived").execute()
         current_count = active_count.count or 0
         if current_count >= max_events:
             raise HTTPException(
                 status_code=403,
-                detail=f"Event limit reached. Your {org_plan} plan allows {max_events} active event(s). Archive an existing event or upgrade your plan."
+                detail=f"Event limit reached. Your {org_plan} plan allows {max_events} active event(s) (including {extra_events} add-on event(s)). Archive an existing event or upgrade your plan."
             )
 
     event_row = {

@@ -136,10 +136,18 @@ async def get_customer(
     users  = db.table("profiles").select("*").eq("org_id", org_id).neq("role", "super_admin").execute()
     events = db.table("events").select("id,name,date_from,date_to,created_at").eq("org_id", org_id).execute()
 
+    # Compute effective max events including add-ons
+    from app.routers.events import PLAN_EVENT_LIMITS, _get_extra_events
+    plan         = org.data.get("plan", "trial")
+    base_max     = org.data.get("max_events") or PLAN_EVENT_LIMITS.get(plan, 1)
+    extra_events = _get_extra_events(db, org_id)
+
     return {
         **org.data,
-        "users":  users.data or [],
-        "events": events.data or [],
+        "users":               users.data or [],
+        "events":              events.data or [],
+        "effective_max_events": base_max + extra_events,
+        "extra_events_addons": extra_events,
     }
 
 
