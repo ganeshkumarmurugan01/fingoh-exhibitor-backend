@@ -11,6 +11,33 @@ from app.models.organisation import (
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
 
+_DEFAULT_PLAN_FEATURES = {
+    "trial":            {"has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "max_contacts_per_event":200,  "max_deep_iei_per_event":20},
+    "single_event":     {"has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "max_contacts_per_event":500,  "max_deep_iei_per_event":50},
+    "event_bundle":     {"has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "max_contacts_per_event":1500, "max_deep_iei_per_event":150},
+    "annual_self_serve":{"has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "max_contacts_per_event":5000, "max_deep_iei_per_event":500},
+    "annual_enterprise":{"has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "max_contacts_per_event":10000,"max_deep_iei_per_event":1000},
+}
+
+def _get_plan_features(db, plan: str) -> dict:
+    try:
+        res = db.table("plan_configs").select("*").eq("plan_id", plan).maybe_single().execute()
+        if res and res.data:
+            d = res.data
+            return {
+                "has_ai_features":        d.get("has_ai_features", True),
+                "has_crm_sync":           d.get("has_crm_sync", False),
+                "has_meeting_scheduler":  d.get("has_meeting_scheduler", True),
+                "has_deep_iei":           d.get("has_deep_iei", False),
+                "has_walk_in_capture":    d.get("has_walk_in_capture", True),
+                "max_contacts_per_event": d.get("max_contacts_per_event", 500),
+                "max_deep_iei_per_event": d.get("max_deep_iei_per_event", 50),
+            }
+    except Exception:
+        pass
+    return _DEFAULT_PLAN_FEATURES.get(plan, _DEFAULT_PLAN_FEATURES["single_event"])
+
+
 @router.get("/me")
 def get_my_profile(current_user: dict = Depends(get_current_user)):
     db = get_db()
@@ -24,15 +51,21 @@ def get_my_profile(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Profile not found")
     profile = result.data[0]
 
-    # Fetch org name
+    # Fetch org info including plan
     org_name = None
+    plan = "trial"
+    org_status = "active"
     if profile.get("org_id"):
-        org_res = db.table("organisations").select("name").eq("id", profile["org_id"]).maybe_single().execute()
+        org_res = db.table("organisations").select("name,plan,status").eq("id", profile["org_id"]).maybe_single().execute()
         if org_res and org_res.data:
-            org_name = org_res.data.get("name")
+            org_name   = org_res.data.get("name")
+            plan       = org_res.data.get("plan") or "trial"
+            org_status = org_res.data.get("status") or "active"
+
+    plan_features = _get_plan_features(db, plan)
 
     email = current_user.get("email") or ""
-    return {**profile, "org_name": org_name, "email": email}
+    return {**profile, "org_name": org_name, "email": email, "plan": plan, "org_status": org_status, "plan_features": plan_features}
 
 
 @router.post("/organisation", response_model=OrganisationResponse, status_code=201)
