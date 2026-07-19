@@ -46,6 +46,25 @@ class UpdateCustomerPayload(BaseModel):
     subscription_expires_at: Optional[str] = None
 
 
+class PlanConfigPayload(BaseModel):
+    plan_id: str
+    label: str
+    description: Optional[str] = None
+    max_events: int = 1
+    max_staff_seats: int = 3
+    has_ai_features: bool = True
+    has_crm_sync: bool = False
+    has_meeting_scheduler: bool = True
+    has_deep_iei: bool = False
+    has_walk_in_capture: bool = True
+    support_level: str = "email"
+    price_inr: Optional[int] = None
+    price_usd: Optional[int] = None
+    is_active: bool = True
+    sort_order: int = 0
+    features_list: Optional[list] = None
+
+
 # ── Helper: generate a random password ───────────────────────────────────────
 
 def _generate_password(length: int = 12) -> str:
@@ -219,11 +238,40 @@ async def update_customer(
     current_user: dict = Depends(require_super_admin),
 ):
     db = get_db()
+
+    # Capture old values before update (for change detection)
+    old_res = db.table("organisations").select("plan,status,name").eq("id", org_id).maybe_single().execute()
+    old = old_res.data or {}
+
     updates = {k: v for k, v in payload.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(400, "No fields to update")
 
     db.table("organisations").update(updates).eq("id", org_id).execute()
+
+    # Auto-email if plan or status changed
+    plan_changed   = "plan"   in updates and updates["plan"]   != old.get("plan")
+    status_changed = "status" in updates and updates["status"] != old.get("status")
+
+    if plan_changed or status_changed:
+        try:
+            profile = db.table("profiles").select("id,name,email").eq("org_id", org_id).eq("role", "admin").maybe_single().execute()
+            if profile.data:
+                new_plan   = updates.get("plan",   old.get("plan",""))
+                new_status = updates.get("status", old.get("status","active"))
+                company    = old.get("name", "")
+                await _send_plan_change_email(
+                    to_email=profile.data.get("email",""),
+                    to_name=profile.data.get("name",""),
+                    company=company,
+                    new_plan=new_plan,
+                    new_status=new_status,
+                    plan_changed=plan_changed,
+                    status_changed=status_changed,
+                )
+        except Exception as e:
+            logger.error("Plan-change email failed: %s", e)
+
     return {"ok": True, "updated": updates}
 
 
@@ -236,7 +284,24 @@ async def set_customer_status(
     current_user: dict = Depends(require_super_admin),
 ):
     db = get_db()
+    old_res = db.table("organisations").select("plan,status,name").eq("id", org_id).maybe_single().execute()
+    old = old_res.data or {}
     db.table("organisations").update({"status": status}).eq("id", org_id).execute()
+    if status != old.get("status"):
+        try:
+            profile = db.table("profiles").select("id,name,email").eq("org_id", org_id).eq("role", "admin").maybe_single().execute()
+            if profile.data:
+                await _send_plan_change_email(
+                    to_email=profile.data.get("email",""),
+                    to_name=profile.data.get("name",""),
+                    company=old.get("name",""),
+                    new_plan=old.get("plan",""),
+                    new_status=status,
+                    plan_changed=False,
+                    status_changed=True,
+                )
+        except Exception as e:
+            logger.error("Status-change email failed: %s", e)
     return {"ok": True, "status": status}
 
 
@@ -563,3 +628,154 @@ async def get_customer_activity(
         .limit(limit)\
         .execute()
     return result.data or []
+
+
+# ── Plan-change notification email ────────────────────────────────────────────
+
+_PLAN_LABELS = {
+    "trial":             "Trial",
+    "single_event":      "Single Event",
+    "event_bundle":      "Event Bundle",
+    "event_portfolio":   "Event Portfolio",
+    "annual_self_serve": "Annual · Self-serve",
+    "annual_enterprise": "Annual · Enterprise",
+}
+
+_STATUS_MSG = {
+    "active":    ("Account Activated", "Your Fingoh account is now active. You can log in and start creating events.", "#16A34A"),
+    "suspended": ("Account Suspended", "Your Fingoh account has been temporarily suspended. Please contact support to restore access.", "#D97706"),
+    "cancelled": ("Account Cancelled", "Your Fingoh subscription has been cancelled. Contact support if you believe this is an error.", "#DC2626"),
+}
+
+async def _send_plan_change_email(
+    to_email: str, to_name: str, company: str,
+    new_plan: str, new_status: str,
+    plan_changed: bool, status_changed: bool,
+) -> bool:
+    import os, httpx
+    from app.routers.meetings import get_zoho_access_token
+
+    ZOHO_ACCOUNT_ID = os.getenv("ZOHO_ACCOUNT_ID", "670863000000008002")
+    ZOHO_FROM_EMAIL = os.getenv("ZOHO_FROM_EMAIL", "noreply@fingoh.ai")
+    FRONTEND_URL    = os.getenv("FRONTEND_URL", "https://exhibitor.fingoh.ai")
+
+    if not to_email:
+        return False
+
+    plan_label = _PLAN_LABELS.get(new_plan, new_plan)
+    status_subject, status_body, status_color = _STATUS_MSG.get(new_status, ("Account Update", "Your account has been updated.", "#0D1B3E"))
+
+    if plan_changed and status_changed:
+        subject = f"Your Fingoh plan has been updated — {plan_label}"
+        body_msg = f"Your plan has been changed to <strong>{plan_label}</strong> and your account status is now <strong>{new_status}</strong>."
+    elif plan_changed:
+        subject = f"Your Fingoh plan has been updated — {plan_label}"
+        body_msg = f"Your Fingoh subscription plan has been changed to <strong>{plan_label}</strong>."
+    else:
+        subject = status_subject
+        body_msg = status_body
+
+    html_body = f"""
+    <div style="font-family: -apple-system, sans-serif; max-width: 560px; margin: 0 auto; background: #ffffff;">
+      <div style="background: #0D1B3E; padding: 28px 32px; border-radius: 12px 12px 0 0;">
+        <h1 style="color: white; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.04em;">Fingoh</h1>
+        <p style="color: rgba(255,255,255,0.6); margin: 4px 0 0 0; font-size: 13px;">Exhibitor Intelligence Platform</p>
+      </div>
+      <div style="padding: 32px; background: #ffffff; border: 1px solid #E2E8F0; border-top: none; border-radius: 0 0 12px 12px;">
+        <p style="font-size: 16px; color: #1E293B; margin: 0 0 8px 0;">Hi {to_name},</p>
+        <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 24px 0;">
+          {body_msg}
+        </p>
+        <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-left: 4px solid {status_color}; border-radius: 10px; padding: 20px 24px; margin-bottom: 24px;">
+          <p style="font-size: 12px; font-weight: 600; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 10px 0;">Account Summary</p>
+          <p style="font-size: 13px; color: #1E293B; margin: 6px 0;"><strong>Company:</strong> {company}</p>
+          <p style="font-size: 13px; color: #1E293B; margin: 6px 0;"><strong>Plan:</strong> {plan_label}</p>
+          <p style="font-size: 13px; color: #1E293B; margin: 6px 0;"><strong>Status:</strong> <span style="color:{status_color};font-weight:700;">{new_status.capitalize()}</span></p>
+        </div>
+        <a href="{FRONTEND_URL}" style="display: inline-block; background: #0D1B3E; color: #ffffff; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-size: 13px; font-weight: 700;">
+          Go to Fingoh
+        </a>
+        <p style="font-size: 12px; color: #94A3B8; margin: 24px 0 0 0; line-height: 1.6;">
+          Questions? Reply to this email or contact your Fingoh account manager.
+        </p>
+      </div>
+    </div>
+    """
+
+    try:
+        access_token = await get_zoho_access_token()
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                f"https://mail.zoho.com/api/accounts/{ZOHO_ACCOUNT_ID}/messages",
+                headers={"Authorization": f"Zoho-oauthtoken {access_token}"},
+                json={
+                    "fromAddress": ZOHO_FROM_EMAIL,
+                    "toAddress":   to_email,
+                    "subject":     subject,
+                    "content":     html_body,
+                    "mailFormat":  "html",
+                },
+            )
+        return r.status_code == 200
+    except Exception as e:
+        logger.exception("Plan-change email failed: %s", e)
+        return False
+
+
+# ── Plan configuration CRUD ────────────────────────────────────────────────────
+
+# Default plan configs — used as fallback if DB table not yet populated
+_DEFAULT_PLAN_CONFIGS = [
+    {"plan_id":"trial",             "label":"Trial",               "description":"1 event, no commitment. Try Fingoh risk-free.",           "max_events":1,   "max_staff_seats":2,  "has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "support_level":"email",     "price_inr":0,       "price_usd":0,     "is_active":True,  "sort_order":0, "features_list":["1 event","Basic IEI scoring","Staff app","Email support"]},
+    {"plan_id":"single_event",      "label":"Single Event",        "description":"1 event, pay per show. Best for first-time exhibitors.", "max_events":1,   "max_staff_seats":3,  "has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "support_level":"email",     "price_inr":25000,   "price_usd":299,   "is_active":True,  "sort_order":1, "features_list":["1 event","IEI scoring + tiers","Staff app","Walk-in capture","Meeting scheduler","Email support"]},
+    {"plan_id":"event_bundle",      "label":"Event Bundle",        "description":"3–6 events at a discounted rate.",                       "max_events":6,   "max_staff_seats":5,  "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":100000,  "price_usd":1199,  "is_active":True,  "sort_order":2, "features_list":["Up to 6 events","Deep IEI Analysis","CRM sync","Staff app","Walk-in capture","Priority support"]},
+    {"plan_id":"event_portfolio",   "label":"Event Portfolio",     "description":"7–15 events at our best per-event rate.",                "max_events":15,  "max_staff_seats":10, "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":200000,  "price_usd":2399,  "is_active":True,  "sort_order":3, "features_list":["Up to 15 events","Deep IEI Analysis","CRM sync","All features","Priority support"]},
+    {"plan_id":"annual_self_serve", "label":"Annual · Self-serve", "description":"5+ shows/year, monthly or annual billing.",              "max_events":999, "max_staff_seats":20, "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":500000,  "price_usd":5999,  "is_active":True,  "sort_order":4, "features_list":["Unlimited events","All AI features","CRM sync","Priority support","Quarterly reviews"]},
+    {"plan_id":"annual_enterprise", "label":"Annual · Enterprise", "description":"Unlimited events, dedicated support.",                   "max_events":999, "max_staff_seats":999,"has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"dedicated", "price_inr":None,    "price_usd":None,  "is_active":True,  "sort_order":5, "features_list":["Unlimited events","All features","Dedicated CSM","Custom integrations","SLA support","Onboarding sessions"]},
+]
+
+
+@router.get("/plan-configs")
+async def get_plan_configs(current_user: dict = Depends(require_super_admin)):
+    """Return plan configurations — from DB if available, else defaults."""
+    db = get_db()
+    try:
+        res = db.table("plan_configs").select("*").order("sort_order").execute()
+        if res.data:
+            return res.data
+    except Exception:
+        pass
+    return _DEFAULT_PLAN_CONFIGS
+
+
+@router.put("/plan-configs/{plan_id}")
+async def upsert_plan_config(
+    plan_id: str,
+    payload: PlanConfigPayload,
+    current_user: dict = Depends(require_super_admin),
+):
+    """Create or update a plan configuration."""
+    db = get_db()
+    data = {k: v for k, v in payload.model_dump().items()}
+    data["plan_id"] = plan_id
+    try:
+        existing = db.table("plan_configs").select("id").eq("plan_id", plan_id).maybe_single().execute()
+        if existing and existing.data:
+            db.table("plan_configs").update(data).eq("plan_id", plan_id).execute()
+        else:
+            db.table("plan_configs").insert(data).execute()
+    except Exception as e:
+        raise HTTPException(500, f"Failed to save plan config: {e}")
+    return {"ok": True, "plan_id": plan_id}
+
+
+@router.post("/plan-configs/reset-defaults")
+async def reset_plan_configs_to_defaults(current_user: dict = Depends(require_super_admin)):
+    """Reset all plan configs to built-in defaults."""
+    db = get_db()
+    try:
+        db.table("plan_configs").delete().neq("plan_id", "").execute()
+        db.table("plan_configs").insert(_DEFAULT_PLAN_CONFIGS).execute()
+    except Exception as e:
+        raise HTTPException(500, f"Reset failed: {e}")
+    return {"ok": True, "reset": len(_DEFAULT_PLAN_CONFIGS)}
