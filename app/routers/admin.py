@@ -728,12 +728,27 @@ async def _send_plan_change_email(
 
 # Default plan configs — used as fallback if DB table not yet populated
 _DEFAULT_PLAN_CONFIGS = [
-    {"plan_id":"trial",             "label":"Trial",               "description":"1 event, no commitment. Try Fingoh risk-free.",           "max_events":1,   "max_staff_seats":2,  "max_contacts_per_event":200,   "max_deep_iei_per_event":20,   "has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "support_level":"email",     "price_inr":0,       "price_usd":0,     "is_active":True,  "sort_order":0, "features_list":["1 event","Up to 200 contacts/event","Basic IEI scoring","Staff app","Email support"]},
-    {"plan_id":"single_event",      "label":"Single Event",        "description":"1 event, pay per show. Best for first-time exhibitors.", "max_events":1,   "max_staff_seats":3,  "max_contacts_per_event":500,   "max_deep_iei_per_event":50,   "has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "support_level":"email",     "price_inr":25000,   "price_usd":299,   "is_active":True,  "sort_order":1, "features_list":["1 event","Up to 500 contacts/event","IEI scoring + tiers","Staff app","Walk-in capture","Meeting scheduler","Email support"]},
-    {"plan_id":"event_bundle",      "label":"Event Bundle",        "description":"3–6 events at a discounted rate.",                       "max_events":6,   "max_staff_seats":5,  "max_contacts_per_event":1500,  "max_deep_iei_per_event":150,  "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":100000,  "price_usd":1199,  "is_active":True,  "sort_order":2, "features_list":["Up to 6 events","Up to 1,500 contacts/event","Deep IEI Analysis (150/event)","CRM sync","Staff app","Walk-in capture","Priority support"]},
-    {"plan_id":"event_portfolio",   "label":"Event Portfolio",     "description":"7–15 events at our best per-event rate.",                "max_events":15,  "max_staff_seats":10, "max_contacts_per_event":3000,  "max_deep_iei_per_event":300,  "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":200000,  "price_usd":2399,  "is_active":True,  "sort_order":3, "features_list":["Up to 15 events","Up to 3,000 contacts/event","Deep IEI Analysis (300/event)","CRM sync","All features","Priority support"]},
-    {"plan_id":"annual_self_serve", "label":"Annual · Self-serve", "description":"5+ shows/year, monthly or annual billing.",              "max_events":999, "max_staff_seats":20, "max_contacts_per_event":5000,  "max_deep_iei_per_event":500,  "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":500000,  "price_usd":5999,  "is_active":True,  "sort_order":4, "features_list":["Unlimited events","Up to 5,000 contacts/event","Deep IEI Analysis (500/event)","CRM sync","All AI features","Priority support","Quarterly reviews"]},
-    {"plan_id":"annual_enterprise", "label":"Annual · Enterprise", "description":"Unlimited events, dedicated support.",                   "max_events":999, "max_staff_seats":999,"max_contacts_per_event":10000, "max_deep_iei_per_event":1000, "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"dedicated", "price_inr":None,    "price_usd":None,  "is_active":True,  "sort_order":5, "features_list":["Unlimited events","Up to 10,000 contacts/event","Deep IEI Analysis (1,000/event)","Dedicated CSM","Custom integrations","SLA support","Onboarding sessions"]},
+    {"plan_id":"trial",             "label":"Trial",               "description":"1 event, no commitment. Try Fingoh risk-free.",                       "max_events":1,   "max_staff_seats":2,  "max_contacts_per_event":200,   "max_deep_iei_per_event":20,   "has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "support_level":"email",     "price_inr":0,      "price_usd":0,    "is_active":True,  "sort_order":0, "features_list":["1 event","Up to 200 contacts/event","Basic IEI scoring","Staff app","Email support"]},
+    {"plan_id":"single_event",      "label":"Single Event",        "description":"1 event, pay per show. Best for first-time exhibitors.",               "max_events":1,   "max_staff_seats":3,  "max_contacts_per_event":500,   "max_deep_iei_per_event":50,   "has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "support_level":"email",     "price_inr":25000,  "price_usd":299,  "is_active":True,  "sort_order":1, "features_list":["1 event","Up to 500 contacts/event","IEI scoring + tiers","Staff app","Walk-in capture","Meeting scheduler","Email support","Add-on events available"]},
+    {"plan_id":"event_bundle",      "label":"Event Bundle",        "description":"5 events pre-purchased. Add extra events as needed.",                  "max_events":5,   "max_staff_seats":5,  "max_contacts_per_event":1500,  "max_deep_iei_per_event":150,  "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":100000, "price_usd":1199, "is_active":True,  "sort_order":2, "features_list":["5 events","Up to 1,500 contacts/event","Deep IEI Analysis (150/event)","CRM sync","Walk-in capture","Priority support","Add-on events + contacts available"]},
+    {"plan_id":"event_portfolio",   "label":"Event Portfolio",     "description":"Retired plan — use Event Bundle or Annual instead.",                   "max_events":15,  "max_staff_seats":10, "max_contacts_per_event":3000,  "max_deep_iei_per_event":300,  "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":200000, "price_usd":2399, "is_active":False, "sort_order":3, "features_list":["Up to 15 events","Up to 3,000 contacts/event","Deep IEI Analysis (300/event)","CRM sync","All features","Priority support"]},
+    {"plan_id":"annual_self_serve", "label":"Annual · Self-serve", "description":"5+ shows/year. Monthly or annual billing.",                            "max_events":999, "max_staff_seats":20, "max_contacts_per_event":5000,  "max_deep_iei_per_event":500,  "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":500000, "price_usd":5999, "is_active":True,  "sort_order":4, "features_list":["Unlimited events","Up to 5,000 contacts/event","Deep IEI Analysis (500/event)","CRM sync","All AI features","Priority support","Quarterly reviews"]},
+    {"plan_id":"annual_enterprise", "label":"Annual · Enterprise", "description":"Unlimited events, dedicated support, custom integrations.",            "max_events":999, "max_staff_seats":999,"max_contacts_per_event":10000, "max_deep_iei_per_event":1000, "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"dedicated", "price_inr":None,   "price_usd":None, "is_active":True,  "sort_order":5, "features_list":["Unlimited events","Up to 10,000 contacts/event","Deep IEI Analysis (1,000/event)","Dedicated CSM","Custom integrations","SLA support","Onboarding sessions"]},
+]
+
+# ── Add-on catalog ────────────────────────────────────────────────────────────
+
+_DEFAULT_ADDON_CATALOG = [
+    # Extra events
+    {"addon_id":"extra_event_1",      "label":"Extra Event",             "addon_type":"extra_events",   "quantity":1,    "price_inr":12000, "price_usd":149, "description":"Add 1 additional event slot.",                         "is_active":True},
+    # Extra contacts
+    {"addon_id":"extra_contacts_100", "label":"Extra 100 Contacts",      "addon_type":"extra_contacts", "quantity":100,  "price_inr":1200,  "price_usd":15,  "description":"Add 100 extra contact slots to a specific event.",      "is_active":True},
+    {"addon_id":"extra_contacts_200", "label":"Extra 200 Contacts",      "addon_type":"extra_contacts", "quantity":200,  "price_inr":2000,  "price_usd":25,  "description":"Add 200 extra contact slots to a specific event.",      "is_active":True},
+    {"addon_id":"extra_contacts_500", "label":"Extra 500 Contacts",      "addon_type":"extra_contacts", "quantity":500,  "price_inr":4500,  "price_usd":55,  "description":"Add 500 extra contact slots to a specific event.",      "is_active":True},
+    # Deep IEI analysis
+    {"addon_id":"deep_iei_20",        "label":"Deep IEI — 20 analyses",  "addon_type":"extra_deep_iei", "quantity":20,   "price_inr":2500,  "price_usd":30,  "description":"Add 20 deep IEI research analyses to a specific event.","is_active":True},
+    {"addon_id":"deep_iei_50",        "label":"Deep IEI — 50 analyses",  "addon_type":"extra_deep_iei", "quantity":50,   "price_inr":5500,  "price_usd":65,  "description":"Add 50 deep IEI research analyses to a specific event.","is_active":True},
+    {"addon_id":"deep_iei_100",       "label":"Deep IEI — 100 analyses", "addon_type":"extra_deep_iei", "quantity":100,  "price_inr":9000,  "price_usd":110, "description":"Add 100 deep IEI research analyses to a specific event.","is_active":True},
 ]
 
 
@@ -781,3 +796,123 @@ async def reset_plan_configs_to_defaults(current_user: dict = Depends(require_su
     except Exception as e:
         raise HTTPException(500, f"Reset failed: {e}")
     return {"ok": True, "reset": len(_DEFAULT_PLAN_CONFIGS)}
+
+
+# ── Add-on catalog endpoints ───────────────────────────────────────────────────
+
+class AddonCatalogPayload(BaseModel):
+    addon_id: str
+    label: str
+    addon_type: str  # 'extra_events' | 'extra_contacts'
+    quantity: int
+    price_inr: Optional[int] = None
+    price_usd: Optional[int] = None
+    description: Optional[str] = None
+    is_active: bool = True
+
+
+@router.get("/addon-catalog")
+async def get_addon_catalog(current_user: dict = Depends(require_super_admin)):
+    db = get_db()
+    try:
+        res = db.table("addon_catalog").select("*").order("addon_type").order("quantity").execute()
+        if res.data:
+            return res.data
+    except Exception:
+        pass
+    return _DEFAULT_ADDON_CATALOG
+
+
+@router.put("/addon-catalog/{addon_id}")
+async def upsert_addon(
+    addon_id: str,
+    payload: AddonCatalogPayload,
+    current_user: dict = Depends(require_super_admin),
+):
+    db = get_db()
+    data = {k: v for k, v in payload.model_dump().items()}
+    data["addon_id"] = addon_id
+    try:
+        existing = db.table("addon_catalog").select("id").eq("addon_id", addon_id).maybe_single().execute()
+        if existing and existing.data:
+            db.table("addon_catalog").update(data).eq("addon_id", addon_id).execute()
+        else:
+            db.table("addon_catalog").insert(data).execute()
+    except Exception as e:
+        raise HTTPException(500, f"Failed to save addon: {e}")
+    return {"ok": True, "addon_id": addon_id}
+
+
+@router.post("/addon-catalog/reset-defaults")
+async def reset_addon_catalog(current_user: dict = Depends(require_super_admin)):
+    db = get_db()
+    try:
+        db.table("addon_catalog").delete().neq("addon_id", "").execute()
+        db.table("addon_catalog").insert(_DEFAULT_ADDON_CATALOG).execute()
+    except Exception as e:
+        raise HTTPException(500, f"Reset failed: {e}")
+    return {"ok": True}
+
+
+# ── Org add-on assignment ──────────────────────────────────────────────────────
+
+class OrgAddonPayload(BaseModel):
+    addon_type: str        # 'extra_events' | 'extra_contacts'
+    quantity: int
+    event_id: Optional[str] = None   # required when addon_type == 'extra_contacts'
+    notes: Optional[str] = None
+    addon_catalog_id: Optional[str] = None  # for reference
+
+
+@router.get("/customers/{org_id}/addons")
+async def list_org_addons(
+    org_id: str,
+    current_user: dict = Depends(require_super_admin),
+):
+    db = get_db()
+    res = db.table("org_addons").select("*").eq("org_id", org_id).order("created_at", desc=True).execute()
+    return res.data or []
+
+
+@router.post("/customers/{org_id}/addons")
+async def add_org_addon(
+    org_id: str,
+    payload: OrgAddonPayload,
+    current_user: dict = Depends(require_super_admin),
+):
+    db = get_db()
+    if payload.addon_type == "extra_contacts" and not payload.event_id:
+        raise HTTPException(400, "event_id is required for extra_contacts add-ons")
+    row = {
+        "org_id":     org_id,
+        "addon_type": payload.addon_type,
+        "quantity":   payload.quantity,
+        "event_id":   payload.event_id,
+        "notes":      payload.notes,
+        "addon_catalog_id": payload.addon_catalog_id,
+    }
+    res = db.table("org_addons").insert(row).execute()
+    return res.data[0] if res.data else {"ok": True}
+
+
+@router.delete("/customers/{org_id}/addons/{addon_row_id}")
+async def remove_org_addon(
+    org_id: str,
+    addon_row_id: str,
+    current_user: dict = Depends(require_super_admin),
+):
+    db = get_db()
+    db.table("org_addons").delete().eq("id", addon_row_id).eq("org_id", org_id).execute()
+    return {"ok": True}
+
+
+def get_org_addon_totals(db, org_id: str, event_id: str) -> dict:
+    """Return total extra_events and extra_contacts for this org/event from add-ons."""
+    try:
+        res = db.table("org_addons").select("addon_type,quantity,event_id").eq("org_id", org_id).execute()
+        rows = res.data or []
+        extra_events   = sum(r["quantity"] for r in rows if r["addon_type"] == "extra_events")
+        extra_contacts = sum(r["quantity"] for r in rows if r["addon_type"] == "extra_contacts" and r.get("event_id") == event_id)
+        return {"extra_events": extra_events, "extra_contacts": extra_contacts}
+    except Exception:
+        return {"extra_events": 0, "extra_contacts": 0}
