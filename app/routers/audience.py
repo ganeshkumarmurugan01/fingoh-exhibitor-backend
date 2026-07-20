@@ -981,7 +981,11 @@ async def list_contacts(
         c["meeting_status"] = m["status"] if m else None
         c["meeting"] = m
 
-    return contacts
+    # Fetch event iei_credits so the UI can display the balance
+    ev_res = supabase.table("events").select("iei_credits").eq("id", event_id).limit(1).execute()
+    iei_credits = (ev_res.data[0].get("iei_credits") if ev_res.data else None)
+
+    return {"contacts": contacts, "iei_credits": iei_credits}
 
 
 def _get(row: dict, key: str) -> str | None:
@@ -1006,6 +1010,21 @@ async def debug_enrich(payload: dict, current_user: dict = Depends(get_current_u
 
 
 # ── Full IEI Research endpoint ────────────────────────────────────────────────
+def _get_or_init_iei_credits(supabase, event_id: str, org_id: str) -> int:
+    """Return current iei_credits for the event, initialising from plan limits if NULL."""
+    ev = supabase.table("events").select("iei_credits").eq("id", event_id).limit(1).execute()
+    if not ev.data:
+        return 0
+    credits = ev.data[0].get("iei_credits")
+    if credits is not None:
+        return int(credits)
+    # First use — initialise from plan
+    limits = _get_plan_limits(supabase, org_id, event_id)
+    initial = limits["max_deep_iei"] * 10
+    supabase.table("events").update({"iei_credits": initial}).eq("id", event_id).execute()
+    return initial
+
+
 @router.post("/research/{contact_id}")
 async def research_contact(
     contact_id: str,
@@ -1018,9 +1037,16 @@ async def research_contact(
     if not contact_res or not contact_res.data:
         raise HTTPException(404, "Contact not found")
     contact = contact_res.data
+    event_id = contact["event_id"]
+
+    # Credit check
+    org_id = get_user_org(current_user["user_id"], supabase)
+    credits = _get_or_init_iei_credits(supabase, event_id, org_id)
+    if credits < 10:
+        raise HTTPException(402, f"Insufficient IEI credits. {credits} credits remaining — each analysis costs 10 credits.")
 
     # Fetch event context
-    event_ctx = _get_event_context(supabase, contact["event_id"])
+    event_ctx = _get_event_context(supabase, event_id)
 
     # Build exhibition config
     ex_name    = event_ctx.get("name") or ""
@@ -1143,7 +1169,14 @@ Respond ONLY with valid JSON (no markdown):
     if not match:
         raise HTTPException(500, "No JSON in AI response")
 
-    return jsonlib.loads(match.group(0))
+    result = jsonlib.loads(match.group(0))
+
+    # Deduct 10 credits and return remaining balance
+    new_credits = max(0, credits - 10)
+    supabase.table("events").update({"iei_credits": new_credits}).eq("id", event_id).execute()
+    result["iei_credits_remaining"] = new_credits
+
+    return result
 
 
 @router.post("/save-research/{contact_id}")

@@ -115,6 +115,11 @@ def create_event(
                 detail=f"Event limit reached. Your {org_plan} plan allows {max_events} active event(s) (including {extra_events} add-on event(s)). Archive an existing event or upgrade your plan."
             )
 
+    # Determine initial IEI credit allocation from plan
+    from app.routers.audience import _get_plan_limits
+    plan_limits   = _get_plan_limits(db, org_id)
+    initial_credits = plan_limits["max_deep_iei"] * 10
+
     event_row = {
         "org_id": org_id,
         "created_by": current_user["user_id"],
@@ -129,6 +134,7 @@ def create_event(
         "product": payload.product,
         "website": payload.website,
         "booth_size": payload.booth_size,
+        "iei_credits": initial_credits,
     }
     event_result = db.table("events").insert(event_row).execute()
     if not event_result.data:
