@@ -185,7 +185,6 @@ async def self_signup(payload: SelfSignupPayload):
         "slug":    slug,
         "plan":    "trial",
         "status":  "active",
-        "country": payload.country,
         "max_events": 1,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }).execute()
