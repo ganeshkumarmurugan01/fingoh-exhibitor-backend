@@ -265,7 +265,7 @@ async def _send_platform_emails(to_email: str, to_name: str, company: str, verif
                 f"https://mail.zoho.com/api/accounts/{ZOHO_ACCOUNT_ID}/messages",
                 headers={"Authorization": f"Zoho-oauthtoken {access_token}"},
                 json={
-                    "fromAddress": f"{sender_name} <{ZOHO_FROM_EMAIL}>",
+                    "fromAddress": ZOHO_FROM_EMAIL,
                     "toAddress":   to_email,
                     "replyTo":     reply_to,
                     "subject":     subject,

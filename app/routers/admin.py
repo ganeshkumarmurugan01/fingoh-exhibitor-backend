@@ -1111,14 +1111,14 @@ async def send_test_platform_email(
             f"https://mail.zoho.com/api/accounts/{ZOHO_ACCOUNT_ID}/messages",
             headers={"Authorization": f"Zoho-oauthtoken {access_token}"},
             json={
-                "fromAddress": f"{sender_name} <{ZOHO_FROM_EMAIL}>",
+                "fromAddress": ZOHO_FROM_EMAIL,
                 "toAddress":   to_email,
-                "replyTo":     reply_to,
                 "subject":     subject_map.get(payload.template_key, "TEST — Fingoh email"),
                 "content":     html,
                 "mailFormat":  "html",
             },
         )
     if r.status_code not in (200, 201):
-        raise HTTPException(500, f"Zoho send failed: {r.text[:200]}")
+        logger.error("Zoho send-test failed: status=%s body=%s", r.status_code, r.text[:500])
+        raise HTTPException(500, f"Zoho send failed ({r.status_code}): {r.text[:300]}")
     return {"ok": True, "sent_to": to_email}
