@@ -941,7 +941,6 @@ def get_org_addon_totals(db, org_id: str, event_id: str) -> dict:
 PLATFORM_EMAIL_CONFIG_KEY = "platform_email"
 
 _DEFAULT_PLATFORM_EMAIL = {
-    "event_id":         PLATFORM_EMAIL_EVENT_ID,
     "logo_url":         None,
     "primary_color":    "#0D1B3E",
     "banner_url":       None,
