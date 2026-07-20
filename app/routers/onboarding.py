@@ -193,7 +193,7 @@ async def self_signup(payload: SelfSignupPayload):
         r = await client.post(admin_url, headers=headers, json={
             "email":         payload.email,
             "password":      payload.password,
-            "email_confirm": True,
+            "email_confirm": False,   # user must verify via email link
             "user_metadata": {"name": payload.name, "org_id": org_id},
         })
 
@@ -239,13 +239,19 @@ async def _send_trial_welcome_email(to_email: str, to_name: str, company: str) -
       </div>
       <div style="padding:32px;background:#fff;border:1px solid #E2E8F0;border-top:none;border-radius:0 0 12px 12px;">
         <p style="font-size:16px;color:#1E293B;margin:0 0 8px;">Hi {to_name},</p>
-        <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 24px;">
-          Welcome to Fingoh! Your Free Trial account for <strong>{company}</strong> is ready.
-          You can now log in and start scoring your leads and prospects for your next trade fair.
+        <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 20px;">
+          Thanks for signing up for Fingoh! We've created your Free Trial account for <strong>{company}</strong>.
         </p>
+        <div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:10px;padding:16px 20px;margin-bottom:24px;">
+          <p style="font-size:14px;color:#92400E;margin:0 0 6px;font-weight:700;">⚠ One more step — verify your email</p>
+          <p style="font-size:13px;color:#92400E;margin:0;line-height:1.6;">
+            You should have received a separate email from Fingoh with a verification link.
+            Click that link to activate your account, then log in at <strong>exhibitor.fingoh.ai</strong>.
+          </p>
+        </div>
         <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:16px 20px;margin-bottom:24px;">
-          <p style="font-size:13px;color:#166534;margin:0;font-weight:600;">✓ Free Trial includes:</p>
-          <ul style="font-size:13px;color:#166534;margin:8px 0 0;padding-left:18px;line-height:1.8;">
+          <p style="font-size:13px;color:#166534;margin:0 0 6px;font-weight:600;">Your Free Trial includes:</p>
+          <ul style="font-size:13px;color:#166534;margin:4px 0 0;padding-left:18px;line-height:1.8;">
             <li>1 event</li>
             <li>Up to 100 contacts with IEI scoring</li>
             <li>10 Deep IEI analyses</li>
@@ -253,10 +259,10 @@ async def _send_trial_welcome_email(to_email: str, to_name: str, company: str) -
           </ul>
         </div>
         <a href="{FRONTEND_URL}" style="display:inline-block;background:#3B9EE8;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:700;">
-          Go to your Dashboard →
+          Go to Dashboard (after verifying) →
         </a>
         <p style="font-size:12px;color:#94A3B8;margin:24px 0 0;line-height:1.6;">
-          Ready to do more? Upgrade to Starter or Growth from inside the app at any time.
+          Didn't get the verification email? Check your spam folder or contact us at hello@fingoh.ai.
         </p>
       </div>
     </div>

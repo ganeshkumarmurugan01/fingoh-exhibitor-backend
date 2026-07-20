@@ -772,22 +772,32 @@ def check_email_registered(event_id: str, email: str):
 
 # ── Upload endpoint ───────────────────────────────────────────────────────────
 
-def _get_plan_limits(db, org_id: str) -> dict:
-    """Return max_contacts_per_event and max_deep_iei_per_event for an org's plan."""
-    from app.routers.admin import _DEFAULT_PLAN_CONFIGS
+def _get_plan_limits(db, org_id: str, event_id: str = None) -> dict:
+    """Return effective contact and deep IEI limits for an org, including add-ons."""
+    from app.routers.admin import _DEFAULT_PLAN_CONFIGS, get_org_addon_totals
     org = db.table("organisations").select("plan").eq("id", org_id).maybe_single().execute()
     plan_id = (org.data.get("plan") if org and org.data else None) or "trial"
     try:
         res = db.table("plan_configs").select("max_contacts_per_event,max_deep_iei_per_event").eq("plan_id", plan_id).maybe_single().execute()
         if res and res.data:
-            return {"max_contacts": res.data.get("max_contacts_per_event", 500),
-                    "max_deep_iei": res.data.get("max_deep_iei_per_event", 50)}
+            base_contacts = res.data.get("max_contacts_per_event", 500)
+            base_deep_iei = res.data.get("max_deep_iei_per_event", 50)
+        else:
+            raise ValueError("no db row")
     except Exception:
-        pass
-    # Fallback to defaults
-    defaults = {c["plan_id"]: c for c in _DEFAULT_PLAN_CONFIGS}
-    cfg = defaults.get(plan_id, defaults["trial"])
-    return {"max_contacts": cfg["max_contacts_per_event"], "max_deep_iei": cfg["max_deep_iei_per_event"]}
+        defaults = {c["plan_id"]: c for c in _DEFAULT_PLAN_CONFIGS}
+        cfg = defaults.get(plan_id, defaults["trial"])
+        base_contacts = cfg["max_contacts_per_event"]
+        base_deep_iei = cfg["max_deep_iei_per_event"]
+
+    # Add org-level add-ons
+    addons = get_org_addon_totals(db, org_id, event_id or "") if event_id else {"extra_contacts": 0, "extra_events": 0}
+    return {
+        "max_contacts": base_contacts + addons["extra_contacts"],
+        "max_deep_iei": base_deep_iei,
+        "base_contacts": base_contacts,
+        "addon_contacts": addons["extra_contacts"],
+    }
 
 
 @router.post("/upload/{event_id}")
@@ -811,7 +821,7 @@ async def upload_audience(
     # ── Enforce contact cap for this org's plan ──────────────────────────────
     from app.auth import get_user_org
     org_id = get_user_org(current_user["user_id"], supabase)
-    limits = _get_plan_limits(supabase, org_id)
+    limits = _get_plan_limits(supabase, org_id, event_id)
     max_contacts = limits["max_contacts"]
 
     existing_count_res = supabase.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).execute()
