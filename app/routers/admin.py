@@ -933,3 +933,115 @@ def get_org_addon_totals(db, org_id: str, event_id: str) -> dict:
         return {"extra_events": extra_events, "extra_contacts": extra_contacts}
     except Exception:
         return {"extra_events": 0, "extra_contacts": 0}
+
+
+# ── Platform email config ─────────────────────────────────────────────────────
+# Stored in the existing email_config table with event_id = '__platform__'
+
+PLATFORM_EMAIL_EVENT_ID = "__platform__"
+
+_DEFAULT_PLATFORM_EMAIL = {
+    "event_id":         PLATFORM_EMAIL_EVENT_ID,
+    "logo_url":         None,
+    "primary_color":    "#0D1B3E",
+    "banner_url":       None,
+    "sender_name":      "Fingoh",
+    "reply_to":         "hello@fingoh.ai",
+    "signature_name":   "The Fingoh Team",
+    "signature_title":  None,
+    "signature_phone":  None,
+    "signature_linkedin": None,
+    "signature_company": "Fingoh",
+    "footer_text":      "Sent via Fingoh · Intent Intelligence for B2B Trade Fairs",
+    "templates": {
+        "signup_verification": (
+            "<p>Hi {{name}},</p>"
+            "<p>Thanks for signing up for Fingoh! Please verify your email address to activate "
+            "your Free Trial account for <strong>{{company}}</strong>.</p>"
+            "<p style='margin:24px 0;'>"
+            "<a href='{{verify_link}}' style='display:inline-block;background:#3B9EE8;color:#fff;"
+            "padding:12px 28px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:700;'>"
+            "Confirm your email →</a></p>"
+            "<p style='font-size:12px;color:#94A3B8;'>This link expires in 24 hours. "
+            "If you didn't sign up, you can safely ignore this email.</p>"
+        ),
+        "trial_welcome": (
+            "<p>Hi {{name}},</p>"
+            "<p>Welcome to Fingoh! Your Free Trial account for <strong>{{company}}</strong> is ready.</p>"
+            "<div style='background:#FFF7ED;border:1px solid #FED7AA;border-radius:10px;"
+            "padding:16px 20px;margin:20px 0;'>"
+            "<p style='font-size:14px;color:#92400E;margin:0 0 6px;font-weight:700;'>"
+            "⚠ One more step — verify your email</p>"
+            "<p style='font-size:13px;color:#92400E;margin:0;line-height:1.6;'>"
+            "Check your inbox for a verification email and click the link to activate your account, "
+            "then log in at <strong>exhibitor.fingoh.ai</strong>.</p></div>"
+            "<div style='background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;"
+            "padding:16px 20px;margin-bottom:20px;'>"
+            "<p style='font-size:13px;color:#166534;margin:0 0 6px;font-weight:600;'>"
+            "Your Free Trial includes:</p>"
+            "<ul style='font-size:13px;color:#166534;margin:4px 0 0;padding-left:18px;line-height:1.8;'>"
+            "<li>1 event</li><li>Up to 100 contacts with IEI scoring</li>"
+            "<li>10 Deep IEI analyses</li><li>Staff app + walk-in capture</li></ul></div>"
+            "<a href='https://exhibitor.fingoh.ai' style='display:inline-block;background:#3B9EE8;"
+            "color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:14px;"
+            "font-weight:700;'>Go to Dashboard (after verifying) →</a>"
+        ),
+    },
+}
+
+
+class PlatformEmailConfigUpdate(BaseModel):
+    logo_url:           Optional[str] = None
+    primary_color:      Optional[str] = None
+    banner_url:         Optional[str] = None
+    sender_name:        Optional[str] = None
+    reply_to:           Optional[str] = None
+    signature_name:     Optional[str] = None
+    signature_title:    Optional[str] = None
+    signature_phone:    Optional[str] = None
+    signature_linkedin: Optional[str] = None
+    signature_company:  Optional[str] = None
+    footer_text:        Optional[str] = None
+    templates:          Optional[dict] = None
+
+
+@router.get("/platform-email-config")
+def get_platform_email_config(current_user: dict = Depends(require_super_admin)):
+    db = get_db()
+    result = db.table("email_config").select("*").eq("event_id", PLATFORM_EMAIL_EVENT_ID).maybe_single().execute()
+    if result and result.data:
+        # Merge with defaults so any new template keys are always present
+        merged = {**_DEFAULT_PLATFORM_EMAIL, **result.data}
+        merged["templates"] = {**_DEFAULT_PLATFORM_EMAIL["templates"], **(result.data.get("templates") or {})}
+        return merged
+    return _DEFAULT_PLATFORM_EMAIL
+
+
+@router.patch("/platform-email-config")
+def update_platform_email_config(
+    payload: PlatformEmailConfigUpdate,
+    current_user: dict = Depends(require_super_admin),
+):
+    db = get_db()
+    fields = {k: v for k, v in payload.dict().items() if v is not None}
+    fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+    existing = db.table("email_config").select("id").eq("event_id", PLATFORM_EMAIL_EVENT_ID).maybe_single().execute()
+    if existing and existing.data:
+        db.table("email_config").update(fields).eq("event_id", PLATFORM_EMAIL_EVENT_ID).execute()
+    else:
+        fields["event_id"] = PLATFORM_EMAIL_EVENT_ID
+        db.table("email_config").insert(fields).execute()
+    result = db.table("email_config").select("*").eq("event_id", PLATFORM_EMAIL_EVENT_ID).maybe_single().execute()
+    data = result.data or {}
+    merged = {**_DEFAULT_PLATFORM_EMAIL, **data}
+    merged["templates"] = {**_DEFAULT_PLATFORM_EMAIL["templates"], **(data.get("templates") or {})}
+    return merged
+
+
+def get_platform_email_config_internal(db) -> dict:
+    """Used internally by the signup flow to fetch platform email config."""
+    result = db.table("email_config").select("*").eq("event_id", PLATFORM_EMAIL_EVENT_ID).maybe_single().execute()
+    data = (result.data or {}) if result else {}
+    merged = {**_DEFAULT_PLATFORM_EMAIL, **data}
+    merged["templates"] = {**_DEFAULT_PLATFORM_EMAIL["templates"], **(data.get("templates") or {})}
+    return merged

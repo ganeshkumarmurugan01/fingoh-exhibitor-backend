@@ -211,13 +211,16 @@ async def self_signup(payload: SelfSignupPayload):
 
     user_id = r.json()["id"]
 
-    # Trigger Supabase verification email (admin create does not send it automatically)
+    # Generate the Supabase verification link so we can send it in our own branded email
+    verify_link = None
     async with httpx.AsyncClient(timeout=15) as client:
-        await client.post(
-            f"{settings.supabase_url}/auth/v1/resend",
-            headers={"apikey": settings.supabase_service_key, "Content-Type": "application/json"},
-            json={"type": "signup", "email": payload.email},
+        gl = await client.post(
+            f"{settings.supabase_url}/auth/v1/admin/generate_link",
+            headers=admin_headers,
+            json={"type": "signup", "email": payload.email, "password": payload.password},
         )
+    if gl.status_code in (200, 201):
+        verify_link = gl.json().get("action_link") or gl.json().get("properties", {}).get("action_link")
 
     # Create profile
     db.table("profiles").upsert({
@@ -228,73 +231,57 @@ async def self_signup(payload: SelfSignupPayload):
         "title": "Account Admin",
     }).execute()
 
-    # Send welcome email (best-effort)
+    # Send verification + welcome emails via Zoho using platform email config (best-effort)
     try:
-        await _send_trial_welcome_email(payload.email, payload.name, payload.company)
+        await _send_platform_emails(payload.email, payload.name, payload.company, verify_link, db)
     except Exception as e:
-        logger.warning("Welcome email failed: %s", e)
+        logger.warning("Platform email send failed: %s", e)
 
     return {"ok": True, "org_id": org_id, "user_id": user_id}
 
 
-async def _send_trial_welcome_email(to_email: str, to_name: str, company: str) -> None:
+async def _send_platform_emails(to_email: str, to_name: str, company: str, verify_link: str | None, db) -> None:
     import os, httpx
     from app.routers.meetings import get_zoho_access_token
+    from app.routers.admin import get_platform_email_config_internal
+    from app.routers.email_config import render_email_html
 
     ZOHO_ACCOUNT_ID = os.getenv("ZOHO_ACCOUNT_ID", "670863000000008002")
     ZOHO_FROM_EMAIL = os.getenv("ZOHO_FROM_EMAIL", "noreply@fingoh.ai")
-    FRONTEND_URL    = os.getenv("FRONTEND_URL", "https://exhibitor.fingoh.ai")
 
-    html_body = f"""
-    <div style="font-family:-apple-system,sans-serif;max-width:560px;margin:0 auto;">
-      <div style="background:#0D1B3E;padding:28px 32px;border-radius:12px 12px 0 0;">
-        <h1 style="color:#fff;margin:0;font-size:22px;font-weight:800;">Fingoh</h1>
-        <p style="color:rgba(255,255,255,0.6);margin:4px 0 0;font-size:13px;">Intent Intelligence for B2B Trade Fairs</p>
-      </div>
-      <div style="padding:32px;background:#fff;border:1px solid #E2E8F0;border-top:none;border-radius:0 0 12px 12px;">
-        <p style="font-size:16px;color:#1E293B;margin:0 0 8px;">Hi {to_name},</p>
-        <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 20px;">
-          Thanks for signing up for Fingoh! We've created your Free Trial account for <strong>{company}</strong>.
-        </p>
-        <div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:10px;padding:16px 20px;margin-bottom:24px;">
-          <p style="font-size:14px;color:#92400E;margin:0 0 6px;font-weight:700;">⚠ One more step — verify your email</p>
-          <p style="font-size:13px;color:#92400E;margin:0;line-height:1.6;">
-            You should have received a separate email from Fingoh with a verification link.
-            Click that link to activate your account, then log in at <strong>exhibitor.fingoh.ai</strong>.
-          </p>
-        </div>
-        <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:16px 20px;margin-bottom:24px;">
-          <p style="font-size:13px;color:#166534;margin:0 0 6px;font-weight:600;">Your Free Trial includes:</p>
-          <ul style="font-size:13px;color:#166534;margin:4px 0 0;padding-left:18px;line-height:1.8;">
-            <li>1 event</li>
-            <li>Up to 100 contacts with IEI scoring</li>
-            <li>10 Deep IEI analyses</li>
-            <li>Staff app + walk-in capture</li>
-          </ul>
-        </div>
-        <a href="{FRONTEND_URL}" style="display:inline-block;background:#3B9EE8;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:700;">
-          Go to Dashboard (after verifying) →
-        </a>
-        <p style="font-size:12px;color:#94A3B8;margin:24px 0 0;line-height:1.6;">
-          Didn't get the verification email? Check your spam folder or contact us at hello@fingoh.ai.
-        </p>
-      </div>
-    </div>
-    """
+    config = get_platform_email_config_internal(db)
+    templates = config.get("templates", {})
+    sender_name = config.get("sender_name") or "Fingoh"
+    reply_to    = config.get("reply_to") or ZOHO_FROM_EMAIL
+
+    extra_vars = {"name": to_name, "company": company, "verify_link": verify_link or "#"}
 
     access_token = await get_zoho_access_token()
-    async with httpx.AsyncClient(timeout=15) as client:
-        await client.post(
-            f"https://mail.zoho.com/api/accounts/{ZOHO_ACCOUNT_ID}/messages",
-            headers={"Authorization": f"Zoho-oauthtoken {access_token}"},
-            json={
-                "fromAddress": ZOHO_FROM_EMAIL,
-                "toAddress":   to_email,
-                "subject":     f"Welcome to Fingoh — your Free Trial is ready",
-                "content":     html_body,
-                "mailFormat":  "html",
-            },
-        )
+
+    async def _zoho_send(subject: str, body_html: str):
+        html = render_email_html(body_html, config, visitor_name=to_name, extra_vars=extra_vars)
+        async with httpx.AsyncClient(timeout=15) as client:
+            await client.post(
+                f"https://mail.zoho.com/api/accounts/{ZOHO_ACCOUNT_ID}/messages",
+                headers={"Authorization": f"Zoho-oauthtoken {access_token}"},
+                json={
+                    "fromAddress": f"{sender_name} <{ZOHO_FROM_EMAIL}>",
+                    "toAddress":   to_email,
+                    "replyTo":     reply_to,
+                    "subject":     subject,
+                    "content":     html,
+                    "mailFormat":  "html",
+                },
+            )
+
+    # 1. Verification email (only if we have a link)
+    if verify_link:
+        verification_body = templates.get("signup_verification", "")
+        await _zoho_send("Confirm your email — Fingoh", verification_body)
+
+    # 2. Welcome email
+    welcome_body = templates.get("trial_welcome", "")
+    await _zoho_send("Welcome to Fingoh — your Free Trial is ready", welcome_body)
 
 
 @router.patch("/me", response_model=ProfileResponse)
