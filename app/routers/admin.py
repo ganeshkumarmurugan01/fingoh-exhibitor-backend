@@ -1005,16 +1005,20 @@ class PlatformEmailConfigUpdate(BaseModel):
     templates:          Optional[dict] = None
 
 
+def _fetch_platform_config(db) -> dict:
+    try:
+        result = db.table("email_config").select("*").eq("event_id", PLATFORM_EMAIL_EVENT_ID).limit(1).execute()
+        data = (result.data[0] if result.data else {})
+    except Exception:
+        data = {}
+    merged = {**_DEFAULT_PLATFORM_EMAIL, **data}
+    merged["templates"] = {**_DEFAULT_PLATFORM_EMAIL["templates"], **(data.get("templates") or {})}
+    return merged
+
+
 @router.get("/platform-email-config")
 def get_platform_email_config(current_user: dict = Depends(require_super_admin)):
-    db = get_db()
-    result = db.table("email_config").select("*").eq("event_id", PLATFORM_EMAIL_EVENT_ID).maybe_single().execute()
-    if result and result.data:
-        # Merge with defaults so any new template keys are always present
-        merged = {**_DEFAULT_PLATFORM_EMAIL, **result.data}
-        merged["templates"] = {**_DEFAULT_PLATFORM_EMAIL["templates"], **(result.data.get("templates") or {})}
-        return merged
-    return _DEFAULT_PLATFORM_EMAIL
+    return _fetch_platform_config(get_db())
 
 
 @router.patch("/platform-email-config")
@@ -1025,23 +1029,19 @@ def update_platform_email_config(
     db = get_db()
     fields = {k: v for k, v in payload.dict().items() if v is not None}
     fields["updated_at"] = datetime.now(timezone.utc).isoformat()
-    existing = db.table("email_config").select("id").eq("event_id", PLATFORM_EMAIL_EVENT_ID).maybe_single().execute()
-    if existing and existing.data:
+    try:
+        existing = db.table("email_config").select("id").eq("event_id", PLATFORM_EMAIL_EVENT_ID).limit(1).execute()
+        has_row = bool(existing.data)
+    except Exception:
+        has_row = False
+    if has_row:
         db.table("email_config").update(fields).eq("event_id", PLATFORM_EMAIL_EVENT_ID).execute()
     else:
         fields["event_id"] = PLATFORM_EMAIL_EVENT_ID
         db.table("email_config").insert(fields).execute()
-    result = db.table("email_config").select("*").eq("event_id", PLATFORM_EMAIL_EVENT_ID).maybe_single().execute()
-    data = result.data or {}
-    merged = {**_DEFAULT_PLATFORM_EMAIL, **data}
-    merged["templates"] = {**_DEFAULT_PLATFORM_EMAIL["templates"], **(data.get("templates") or {})}
-    return merged
+    return _fetch_platform_config(db)
 
 
 def get_platform_email_config_internal(db) -> dict:
     """Used internally by the signup flow to fetch platform email config."""
-    result = db.table("email_config").select("*").eq("event_id", PLATFORM_EMAIL_EVENT_ID).maybe_single().execute()
-    data = (result.data or {}) if result else {}
-    merged = {**_DEFAULT_PLATFORM_EMAIL, **data}
-    merged["templates"] = {**_DEFAULT_PLATFORM_EMAIL["templates"], **(data.get("templates") or {})}
-    return merged
+    return _fetch_platform_config(db)
