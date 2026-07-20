@@ -938,7 +938,7 @@ def get_org_addon_totals(db, org_id: str, event_id: str) -> dict:
 # ── Platform email config ─────────────────────────────────────────────────────
 # Stored in the existing email_config table with event_id = '__platform__'
 
-PLATFORM_EMAIL_EVENT_ID = "00000000-0000-0000-0000-000000000001"  # sentinel UUID for platform-level config
+PLATFORM_EMAIL_CONFIG_KEY = "platform_email"
 
 _DEFAULT_PLATFORM_EMAIL = {
     "event_id":         PLATFORM_EMAIL_EVENT_ID,
@@ -1007,8 +1007,8 @@ class PlatformEmailConfigUpdate(BaseModel):
 
 def _fetch_platform_config(db) -> dict:
     try:
-        result = db.table("email_config").select("*").eq("event_id", PLATFORM_EMAIL_EVENT_ID).limit(1).execute()
-        data = (result.data[0] if result.data else {})
+        result = db.table("platform_config").select("value").eq("key", PLATFORM_EMAIL_CONFIG_KEY).limit(1).execute()
+        data = (result.data[0].get("value") or {}) if result.data else {}
     except Exception:
         data = {}
     merged = {**_DEFAULT_PLATFORM_EMAIL, **data}
@@ -1027,17 +1027,10 @@ def update_platform_email_config(
     current_user: dict = Depends(require_super_admin),
 ):
     db = get_db()
-
-    # Fetch admin's org_id to satisfy NOT NULL on email_config.org_id
-    profile = db.table("profiles").select("org_id").eq("id", current_user["user_id"]).limit(1).execute()
-    org_id = (profile.data[0].get("org_id") if profile.data else None) or "00000000-0000-0000-0000-000000000000"
-
-    # Include ALL fields (nulls too, so clearing logo_url etc. persists)
-    fields = payload.dict()
-    fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+    value = payload.dict()
 
     try:
-        existing = db.table("email_config").select("id").eq("event_id", PLATFORM_EMAIL_EVENT_ID).limit(1).execute()
+        existing = db.table("platform_config").select("key").eq("key", PLATFORM_EMAIL_CONFIG_KEY).limit(1).execute()
         has_row = bool(existing.data)
     except Exception as e:
         logger.error("platform-email-config existence check failed: %s", e)
@@ -1045,14 +1038,11 @@ def update_platform_email_config(
 
     try:
         if has_row:
-            res = db.table("email_config").update(fields).eq("event_id", PLATFORM_EMAIL_EVENT_ID).execute()
+            res = db.table("platform_config").update({"value": value}).eq("key", PLATFORM_EMAIL_CONFIG_KEY).execute()
         else:
-            fields["event_id"] = PLATFORM_EMAIL_EVENT_ID
-            fields["org_id"]   = org_id
-            res = db.table("email_config").insert(fields).execute()
+            res = db.table("platform_config").insert({"key": PLATFORM_EMAIL_CONFIG_KEY, "value": value}).execute()
         if not res.data:
-            logger.warning("platform-email-config write returned no data (RLS or constraint issue)")
-            raise HTTPException(500, "Save returned no data — possible RLS or schema constraint. Check Railway logs.")
+            raise HTTPException(500, "Save returned no data — check Railway logs.")
     except HTTPException:
         raise
     except Exception as e:
