@@ -12,11 +12,16 @@ router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
 
 _DEFAULT_PLAN_FEATURES = {
-    "trial":            {"has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "max_contacts_per_event":200,  "max_deep_iei_per_event":20},
-    "single_event":     {"has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "max_contacts_per_event":500,  "max_deep_iei_per_event":50},
-    "event_bundle":     {"has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "max_contacts_per_event":1500, "max_deep_iei_per_event":150},
-    "annual_self_serve":{"has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "max_contacts_per_event":5000, "max_deep_iei_per_event":500},
-    "annual_enterprise":{"has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "max_contacts_per_event":10000,"max_deep_iei_per_event":1000},
+    # Current plans
+    "trial":   {"has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":False, "has_deep_iei":False, "has_walk_in_capture":True,  "max_contacts_per_event":100,   "max_deep_iei_per_event":10},
+    "starter": {"has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "max_contacts_per_event":500,   "max_deep_iei_per_event":50},
+    "growth":  {"has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "max_contacts_per_event":2000,  "max_deep_iei_per_event":200},
+    "scale":   {"has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "max_contacts_per_event":10000, "max_deep_iei_per_event":1000},
+    # Legacy plan IDs — backward compat for existing orgs
+    "single_event":     {"has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "max_contacts_per_event":500,   "max_deep_iei_per_event":50},
+    "event_bundle":     {"has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "max_contacts_per_event":1500,  "max_deep_iei_per_event":150},
+    "annual_self_serve":{"has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "max_contacts_per_event":5000,  "max_deep_iei_per_event":500},
+    "annual_enterprise":{"has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "max_contacts_per_event":10000, "max_deep_iei_per_event":1000},
 }
 
 def _get_plan_features(db, plan: str) -> dict:
@@ -35,7 +40,7 @@ def _get_plan_features(db, plan: str) -> dict:
             }
     except Exception:
         pass
-    return _DEFAULT_PLAN_FEATURES.get(plan, _DEFAULT_PLAN_FEATURES["single_event"])
+    return _DEFAULT_PLAN_FEATURES.get(plan, _DEFAULT_PLAN_FEATURES["starter"])
 
 
 @router.get("/me")

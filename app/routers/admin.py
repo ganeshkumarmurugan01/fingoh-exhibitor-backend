@@ -32,8 +32,8 @@ class CreateCustomerPayload(BaseModel):
     slug: str
     admin_email: str
     admin_name: str
-    plan: str = "starter"
-    max_events: int = 3
+    plan: str = "trial"
+    max_events: int = 1
     admin_notes: Optional[str] = None
     subscription_expires_at: Optional[str] = None
 
@@ -389,9 +389,10 @@ async def admin_stats(
         "total_events":     events.count or 0,
         "total_contacts":   contacts.count or 0,
         "plans": {p: sum(1 for o in orgs_data if o.get("plan") == p) for p in [
-            "trial", "single_event", "event_bundle", "event_portfolio",
-            "annual_self_serve", "annual_enterprise",
-            "starter", "pro", "enterprise",  # legacy
+            "trial", "starter", "growth", "scale",
+            # legacy
+            "single_event", "event_bundle", "event_portfolio",
+            "annual_self_serve", "annual_enterprise", "pro", "enterprise",
         ]}
     }
 
@@ -643,7 +644,12 @@ async def get_customer_activity(
 # ── Plan-change notification email ────────────────────────────────────────────
 
 _PLAN_LABELS = {
-    "trial":             "Trial",
+    # Current plans
+    "trial":             "Free Trial",
+    "starter":           "Starter",
+    "growth":            "Growth",
+    "scale":             "Scale",
+    # Legacy — kept for email notifications on existing orgs
     "single_event":      "Single Event",
     "event_bundle":      "Event Bundle",
     "event_portfolio":   "Event Portfolio",
@@ -736,12 +742,15 @@ async def _send_plan_change_email(
 
 # Default plan configs — used as fallback if DB table not yet populated
 _DEFAULT_PLAN_CONFIGS = [
-    {"plan_id":"trial",             "label":"Trial",               "description":"1 event, no commitment. Try Fingoh risk-free.",                       "max_events":1,   "max_staff_seats":2,  "max_contacts_per_event":200,   "max_deep_iei_per_event":20,   "has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "support_level":"email",     "price_inr":0,      "price_usd":0,    "is_active":True,  "sort_order":0, "features_list":["1 event","Up to 200 contacts/event","Basic IEI scoring","Staff app","Email support"]},
-    {"plan_id":"single_event",      "label":"Single Event",        "description":"1 event, pay per show. Best for first-time exhibitors.",               "max_events":1,   "max_staff_seats":3,  "max_contacts_per_event":500,   "max_deep_iei_per_event":50,   "has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "support_level":"email",     "price_inr":25000,  "price_usd":299,  "is_active":True,  "sort_order":1, "features_list":["1 event","Up to 500 contacts/event","IEI scoring + tiers","Staff app","Walk-in capture","Meeting scheduler","Email support","Add-on events available"]},
-    {"plan_id":"event_bundle",      "label":"Event Bundle",        "description":"5 events pre-purchased. Add extra events as needed.",                  "max_events":5,   "max_staff_seats":5,  "max_contacts_per_event":1500,  "max_deep_iei_per_event":150,  "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":100000, "price_usd":1199, "is_active":True,  "sort_order":2, "features_list":["5 events","Up to 1,500 contacts/event","Deep IEI Analysis (150/event)","CRM sync","Walk-in capture","Priority support","Add-on events + contacts available"]},
-    {"plan_id":"event_portfolio",   "label":"Event Portfolio",     "description":"Retired plan — use Event Bundle or Annual instead.",                   "max_events":15,  "max_staff_seats":10, "max_contacts_per_event":3000,  "max_deep_iei_per_event":300,  "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":200000, "price_usd":2399, "is_active":False, "sort_order":3, "features_list":["Up to 15 events","Up to 3,000 contacts/event","Deep IEI Analysis (300/event)","CRM sync","All features","Priority support"]},
-    {"plan_id":"annual_self_serve", "label":"Annual · Self-serve", "description":"5+ shows/year. Monthly or annual billing.",                            "max_events":999, "max_staff_seats":20, "max_contacts_per_event":5000,  "max_deep_iei_per_event":500,  "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":500000, "price_usd":5999, "is_active":True,  "sort_order":4, "features_list":["Unlimited events","Up to 5,000 contacts/event","Deep IEI Analysis (500/event)","CRM sync","All AI features","Priority support","Quarterly reviews"]},
-    {"plan_id":"annual_enterprise", "label":"Annual · Enterprise", "description":"Unlimited events, dedicated support, custom integrations.",            "max_events":999, "max_staff_seats":999,"max_contacts_per_event":10000, "max_deep_iei_per_event":1000, "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"dedicated", "price_inr":None,   "price_usd":None, "is_active":True,  "sort_order":5, "features_list":["Unlimited events","Up to 10,000 contacts/event","Deep IEI Analysis (1,000/event)","Dedicated CSM","Custom integrations","SLA support","Onboarding sessions"]},
+    {"plan_id":"trial",   "label":"Free Trial", "description":"1 event, no commitment. Try Fingoh risk-free.",            "max_events":1, "max_staff_seats":2,  "max_contacts_per_event":100,   "max_deep_iei_per_event":10,   "has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":False, "has_deep_iei":False, "has_walk_in_capture":True,  "support_level":"email",     "price_inr":0,     "price_usd":0,    "is_active":True, "sort_order":0, "features_list":["1 event","Up to 100 contacts/event","Basic IEI scoring","10 Deep IEI analyses","Staff app + walk-in capture","Email support"]},
+    {"plan_id":"starter", "label":"Starter",    "description":"1 event, pay per show. Best for first-time exhibitors.",   "max_events":1, "max_staff_seats":3,  "max_contacts_per_event":500,   "max_deep_iei_per_event":50,   "has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "support_level":"email",     "price_inr":25000, "price_usd":299,  "is_active":True, "sort_order":1, "features_list":["1 event","Up to 500 contacts/event","IEI scoring + T1–T4 tiers","50 Deep IEI analyses","Staff app + walk-in capture","Meeting scheduler","Email support","Add-ons available"]},
+    {"plan_id":"growth",  "label":"Growth",     "description":"1 event with full automation. Best for teams doing 3–6 shows/year.", "max_events":1, "max_staff_seats":5,  "max_contacts_per_event":2000,  "max_deep_iei_per_event":200,  "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":65000, "price_usd":799,  "is_active":True, "sort_order":2, "features_list":["1 event","Up to 2,000 contacts/event","200 Deep IEI analyses","CRM sync (Zoho, HubSpot, Salesforce)","Multi-channel outreach","Live intent scoring dashboard","Show ROI reporting","Priority support","Add-ons available"]},
+    {"plan_id":"scale",   "label":"Scale",      "description":"Enterprise teams with multiple shows, regions and products.", "max_events":1, "max_staff_seats":999,"max_contacts_per_event":10000, "max_deep_iei_per_event":1000, "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"dedicated", "price_inr":None,  "price_usd":None, "is_active":True, "sort_order":3, "features_list":["Unlimited prospects","Dedicated account manager","Custom outreach templates","Multi-show dashboard","API access","White-glove onboarding","SLA support"]},
+    # Legacy plans — inactive, kept for backward compat with existing orgs
+    {"plan_id":"single_event",      "label":"Single Event (Legacy)",    "description":"Legacy plan.",  "max_events":1,   "max_staff_seats":3,  "max_contacts_per_event":500,   "max_deep_iei_per_event":50,   "has_ai_features":True,  "has_crm_sync":False, "has_meeting_scheduler":True,  "has_deep_iei":False, "has_walk_in_capture":True,  "support_level":"email",     "price_inr":25000,  "price_usd":299,  "is_active":False, "sort_order":10, "features_list":[]},
+    {"plan_id":"event_bundle",      "label":"Event Bundle (Legacy)",    "description":"Legacy plan.",  "max_events":5,   "max_staff_seats":5,  "max_contacts_per_event":1500,  "max_deep_iei_per_event":150,  "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":100000, "price_usd":1199, "is_active":False, "sort_order":11, "features_list":[]},
+    {"plan_id":"annual_self_serve", "label":"Annual Self-serve (Legacy)","description":"Legacy plan.", "max_events":999, "max_staff_seats":20, "max_contacts_per_event":5000,  "max_deep_iei_per_event":500,  "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"priority",  "price_inr":500000, "price_usd":5999, "is_active":False, "sort_order":12, "features_list":[]},
+    {"plan_id":"annual_enterprise", "label":"Annual Enterprise (Legacy)","description":"Legacy plan.", "max_events":999, "max_staff_seats":999,"max_contacts_per_event":10000, "max_deep_iei_per_event":1000, "has_ai_features":True,  "has_crm_sync":True,  "has_meeting_scheduler":True,  "has_deep_iei":True,  "has_walk_in_capture":True,  "support_level":"dedicated", "price_inr":None,   "price_usd":None, "is_active":False, "sort_order":13, "features_list":[]},
 ]
 
 # ── Add-on catalog ────────────────────────────────────────────────────────────

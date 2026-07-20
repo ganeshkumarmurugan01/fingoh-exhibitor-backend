@@ -70,14 +70,17 @@ def get_plan_info(current_user: dict = Depends(get_current_user)):
 
 
 PLAN_EVENT_LIMITS = {
+    # Current plans
     "trial":             1,
+    "starter":           1,
+    "growth":            1,
+    "scale":             1,
+    # Legacy plan IDs — backward compat for existing orgs
     "single_event":      1,
     "event_bundle":      6,
     "event_portfolio":   15,
     "annual_self_serve": 999,
     "annual_enterprise": 999,
-    # legacy names kept for backward compat
-    "starter":           3,
     "pro":               10,
     "enterprise":        999,
 }
