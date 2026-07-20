@@ -1,4 +1,10 @@
+import re
+import secrets
+import string
+import logging
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, EmailStr
 from app.auth import get_current_user
 from app.database import get_db
 from app.models.organisation import (
@@ -7,6 +13,8 @@ from app.models.organisation import (
     ProfileResponse,
     ProfileUpdate,
 )
+
+logger = logging.getLogger("fingoh.onboarding")
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
@@ -122,6 +130,151 @@ def create_organisation(
     }).eq("id", user_id).execute()
 
     return org
+
+
+# ── Public self-signup ────────────────────────────────────────────────────────
+
+class SelfSignupPayload(BaseModel):
+    name: str
+    company: str
+    email: EmailStr
+    country: str
+    password: str
+
+
+@router.post("/signup", status_code=201)
+async def self_signup(payload: SelfSignupPayload):
+    """
+    Public endpoint — no auth required.
+    Creates a Supabase auth user + org + profile on the trial plan.
+    """
+    import httpx
+    from app.config import get_settings
+    settings = get_settings()
+
+    db = get_db()
+
+    # Derive a slug from company name
+    slug = re.sub(r"[^a-z0-9]+", "-", payload.company.lower()).strip("-")[:40]
+    # Ensure slug uniqueness
+    existing = db.table("organisations").select("id").eq("slug", slug).execute()
+    if existing.data:
+        slug = f"{slug}-{secrets.token_hex(3)}"
+
+    # Check email not already registered
+    email_check = db.table("profiles").select("id").eq("email", payload.email).execute()
+    if email_check.data:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+
+    # Create org on trial plan
+    org_res = db.table("organisations").insert({
+        "name":    payload.company,
+        "slug":    slug,
+        "plan":    "trial",
+        "status":  "active",
+        "country": payload.country,
+        "max_events": 1,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }).execute()
+
+    if not org_res.data:
+        raise HTTPException(status_code=500, detail="Failed to create organisation")
+
+    org_id = org_res.data[0]["id"]
+
+    # Create Supabase auth user
+    admin_url = f"{settings.supabase_url}/auth/v1/admin/users"
+    headers = {
+        "apikey":        settings.supabase_service_key,
+        "Authorization": f"Bearer {settings.supabase_service_key}",
+        "Content-Type":  "application/json",
+    }
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.post(admin_url, headers=headers, json={
+            "email":         payload.email,
+            "password":      payload.password,
+            "email_confirm": True,
+            "user_metadata": {"name": payload.name, "org_id": org_id},
+        })
+
+    if r.status_code not in (200, 201):
+        db.table("organisations").delete().eq("id", org_id).execute()
+        err = r.json().get("msg") or r.json().get("message") or r.text[:200]
+        raise HTTPException(status_code=400, detail=err)
+
+    user_id = r.json()["id"]
+
+    # Create profile
+    db.table("profiles").upsert({
+        "id":      user_id,
+        "org_id":  org_id,
+        "name":    payload.name,
+        "role":    "admin",
+        "title":   "Account Admin",
+        "country": payload.country,
+    }).execute()
+
+    # Send welcome email (best-effort)
+    try:
+        await _send_trial_welcome_email(payload.email, payload.name, payload.company)
+    except Exception as e:
+        logger.warning("Welcome email failed: %s", e)
+
+    return {"ok": True, "org_id": org_id, "user_id": user_id}
+
+
+async def _send_trial_welcome_email(to_email: str, to_name: str, company: str) -> None:
+    import os, httpx
+    from app.routers.meetings import get_zoho_access_token
+
+    ZOHO_ACCOUNT_ID = os.getenv("ZOHO_ACCOUNT_ID", "670863000000008002")
+    ZOHO_FROM_EMAIL = os.getenv("ZOHO_FROM_EMAIL", "noreply@fingoh.ai")
+    FRONTEND_URL    = os.getenv("FRONTEND_URL", "https://exhibitor.fingoh.ai")
+
+    html_body = f"""
+    <div style="font-family:-apple-system,sans-serif;max-width:560px;margin:0 auto;">
+      <div style="background:#0D1B3E;padding:28px 32px;border-radius:12px 12px 0 0;">
+        <h1 style="color:#fff;margin:0;font-size:22px;font-weight:800;">Fingoh</h1>
+        <p style="color:rgba(255,255,255,0.6);margin:4px 0 0;font-size:13px;">Intent Intelligence for B2B Trade Fairs</p>
+      </div>
+      <div style="padding:32px;background:#fff;border:1px solid #E2E8F0;border-top:none;border-radius:0 0 12px 12px;">
+        <p style="font-size:16px;color:#1E293B;margin:0 0 8px;">Hi {to_name},</p>
+        <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 24px;">
+          Welcome to Fingoh! Your Free Trial account for <strong>{company}</strong> is ready.
+          You can now log in and start scoring your leads and prospects for your next trade fair.
+        </p>
+        <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:16px 20px;margin-bottom:24px;">
+          <p style="font-size:13px;color:#166534;margin:0;font-weight:600;">✓ Free Trial includes:</p>
+          <ul style="font-size:13px;color:#166534;margin:8px 0 0;padding-left:18px;line-height:1.8;">
+            <li>1 event</li>
+            <li>Up to 100 contacts with IEI scoring</li>
+            <li>10 Deep IEI analyses</li>
+            <li>Staff app + walk-in capture</li>
+          </ul>
+        </div>
+        <a href="{FRONTEND_URL}" style="display:inline-block;background:#3B9EE8;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:700;">
+          Go to your Dashboard →
+        </a>
+        <p style="font-size:12px;color:#94A3B8;margin:24px 0 0;line-height:1.6;">
+          Ready to do more? Upgrade to Starter or Growth from inside the app at any time.
+        </p>
+      </div>
+    </div>
+    """
+
+    access_token = await get_zoho_access_token()
+    async with httpx.AsyncClient(timeout=15) as client:
+        await client.post(
+            f"https://mail.zoho.com/api/accounts/{ZOHO_ACCOUNT_ID}/messages",
+            headers={"Authorization": f"Zoho-oauthtoken {access_token}"},
+            json={
+                "fromAddress": ZOHO_FROM_EMAIL,
+                "toAddress":   to_email,
+                "subject":     f"Welcome to Fingoh — your Free Trial is ready",
+                "content":     html_body,
+                "mailFormat":  "html",
+            },
+        )
 
 
 @router.patch("/me", response_model=ProfileResponse)
