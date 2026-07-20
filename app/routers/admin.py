@@ -1079,20 +1079,9 @@ async def send_test_platform_email(
     sender_name     = config.get("sender_name") or "Fingoh"
     reply_to        = config.get("reply_to") or ZOHO_FROM_EMAIL
 
-    # Get the admin's email from Supabase
     from app.config import get_settings
     settings = get_settings()
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get(
-            f"{settings.supabase_url}/auth/v1/admin/users/{current_user['user_id']}",
-            headers={
-                "apikey": settings.supabase_service_key,
-                "Authorization": f"Bearer {settings.supabase_service_key}",
-            },
-        )
-    to_email = (r.json().get("email") if r.status_code == 200 else None) or current_user.get("email", "")
-    if not to_email:
-        raise HTTPException(400, "Could not resolve admin email address")
+    to_email = os.getenv("PLATFORM_TEST_EMAIL", "hello@fingoh.ai")
 
     extra_vars = {
         "name": "Jane Smith",
