@@ -29,6 +29,7 @@ app.add_middleware(
         "https://staff.fingoh.ai",
         "https://admin.fingoh.ai",
         "https://fingoh.ai",
+        "https://www.fingoh.ai",
         "http://localhost:5173",
         "http://localhost:3000",
     ],
