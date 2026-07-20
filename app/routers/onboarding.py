@@ -154,6 +154,12 @@ async def self_signup(payload: SelfSignupPayload):
 
     db = get_db()
 
+    admin_headers = {
+        "apikey":        settings.supabase_service_key,
+        "Authorization": f"Bearer {settings.supabase_service_key}",
+        "Content-Type":  "application/json",
+    }
+
     # Derive a slug from company name
     slug = re.sub(r"[^a-z0-9]+", "-", payload.company.lower()).strip("-")[:40]
     # Ensure slug uniqueness
@@ -161,10 +167,17 @@ async def self_signup(payload: SelfSignupPayload):
     if existing.data:
         slug = f"{slug}-{secrets.token_hex(3)}"
 
-    # Check email not already registered
-    email_check = db.table("profiles").select("id").eq("email", payload.email).execute()
-    if email_check.data:
-        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+    # Check email not already registered (email lives in auth.users, not profiles)
+    async with httpx.AsyncClient(timeout=15) as client:
+        lookup = await client.get(
+            f"{settings.supabase_url}/auth/v1/admin/users",
+            headers=admin_headers,
+            params={"filter": payload.email, "per_page": 1},
+        )
+    if lookup.status_code == 200:
+        users = lookup.json().get("users", [])
+        if any(u.get("email", "").lower() == payload.email.lower() for u in users):
+            raise HTTPException(status_code=409, detail="An account with this email already exists.")
 
     # Create org on trial plan
     org_res = db.table("organisations").insert({
@@ -184,13 +197,8 @@ async def self_signup(payload: SelfSignupPayload):
 
     # Create Supabase auth user
     admin_url = f"{settings.supabase_url}/auth/v1/admin/users"
-    headers = {
-        "apikey":        settings.supabase_service_key,
-        "Authorization": f"Bearer {settings.supabase_service_key}",
-        "Content-Type":  "application/json",
-    }
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(admin_url, headers=headers, json={
+        r = await client.post(admin_url, headers=admin_headers, json={
             "email":         payload.email,
             "password":      payload.password,
             "email_confirm": False,   # user must verify via email link
