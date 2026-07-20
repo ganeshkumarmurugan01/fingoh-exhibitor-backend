@@ -1028,23 +1028,36 @@ def update_platform_email_config(
 ):
     db = get_db()
 
-    # Get admin's org_id to satisfy the NOT NULL constraint on email_config.org_id
+    # Fetch admin's org_id to satisfy NOT NULL on email_config.org_id
     profile = db.table("profiles").select("org_id").eq("id", current_user["user_id"]).limit(1).execute()
     org_id = (profile.data[0].get("org_id") if profile.data else None) or "00000000-0000-0000-0000-000000000000"
 
-    # Include all fields (including nulls so clearing a value is persisted)
+    # Include ALL fields (nulls too, so clearing logo_url etc. persists)
     fields = payload.dict()
     fields["updated_at"] = datetime.now(timezone.utc).isoformat()
-    fields["event_id"]   = PLATFORM_EMAIL_EVENT_ID
-    fields["org_id"]     = org_id
 
     try:
-        result = db.table("email_config").upsert(fields, on_conflict="event_id").execute()
-        if not result.data:
-            logger.warning("platform-email-config upsert returned no data; fields=%s", list(fields.keys()))
+        existing = db.table("email_config").select("id").eq("event_id", PLATFORM_EMAIL_EVENT_ID).limit(1).execute()
+        has_row = bool(existing.data)
     except Exception as e:
-        logger.error("platform-email-config upsert failed: %s", e)
-        raise HTTPException(500, f"Failed to save email config: {e}")
+        logger.error("platform-email-config existence check failed: %s", e)
+        raise HTTPException(500, f"DB error: {e}")
+
+    try:
+        if has_row:
+            res = db.table("email_config").update(fields).eq("event_id", PLATFORM_EMAIL_EVENT_ID).execute()
+        else:
+            fields["event_id"] = PLATFORM_EMAIL_EVENT_ID
+            fields["org_id"]   = org_id
+            res = db.table("email_config").insert(fields).execute()
+        if not res.data:
+            logger.warning("platform-email-config write returned no data (RLS or constraint issue)")
+            raise HTTPException(500, "Save returned no data — possible RLS or schema constraint. Check Railway logs.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("platform-email-config write failed: %s", e)
+        raise HTTPException(500, f"Failed to save: {e}")
 
     return _fetch_platform_config(db)
 
