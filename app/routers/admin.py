@@ -1045,3 +1045,71 @@ def update_platform_email_config(
 def get_platform_email_config_internal(db) -> dict:
     """Used internally by the signup flow to fetch platform email config."""
     return _fetch_platform_config(db)
+
+
+class SendTestEmailPayload(BaseModel):
+    template_key: str  # "signup_verification" | "trial_welcome"
+
+
+@router.post("/platform-email-config/send-test")
+async def send_test_platform_email(
+    payload: SendTestEmailPayload,
+    current_user: dict = Depends(require_super_admin),
+):
+    import os, httpx
+    from app.routers.meetings import get_zoho_access_token
+    from app.routers.email_config import render_email_html
+
+    db = get_db()
+    config = _fetch_platform_config(db)
+    templates = config.get("templates", {})
+    body_html = templates.get(payload.template_key, "<p>No template configured yet.</p>")
+
+    ZOHO_ACCOUNT_ID = os.getenv("ZOHO_ACCOUNT_ID", "670863000000008002")
+    ZOHO_FROM_EMAIL = os.getenv("ZOHO_FROM_EMAIL", "noreply@fingoh.ai")
+    sender_name     = config.get("sender_name") or "Fingoh"
+    reply_to        = config.get("reply_to") or ZOHO_FROM_EMAIL
+
+    # Get the admin's email from Supabase
+    from app.config import get_settings
+    settings = get_settings()
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(
+            f"{settings.supabase_url}/auth/v1/admin/users/{current_user['user_id']}",
+            headers={
+                "apikey": settings.supabase_service_key,
+                "Authorization": f"Bearer {settings.supabase_service_key}",
+            },
+        )
+    to_email = (r.json().get("email") if r.status_code == 200 else None) or current_user.get("email", "")
+    if not to_email:
+        raise HTTPException(400, "Could not resolve admin email address")
+
+    extra_vars = {
+        "name": "Jane Smith",
+        "company": "Acme Corp",
+        "verify_link": "https://exhibitor.fingoh.ai",
+    }
+    subject_map = {
+        "signup_verification": "TEST — Confirm your email — Fingoh",
+        "trial_welcome": "TEST — Welcome to Fingoh — your Free Trial is ready",
+    }
+    html = render_email_html(body_html, config, visitor_name="Jane Smith", extra_vars=extra_vars)
+
+    access_token = await get_zoho_access_token()
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.post(
+            f"https://mail.zoho.com/api/accounts/{ZOHO_ACCOUNT_ID}/messages",
+            headers={"Authorization": f"Zoho-oauthtoken {access_token}"},
+            json={
+                "fromAddress": f"{sender_name} <{ZOHO_FROM_EMAIL}>",
+                "toAddress":   to_email,
+                "replyTo":     reply_to,
+                "subject":     subject_map.get(payload.template_key, "TEST — Fingoh email"),
+                "content":     html,
+                "mailFormat":  "html",
+            },
+        )
+    if r.status_code not in (200, 201):
+        raise HTTPException(500, f"Zoho send failed: {r.text[:200]}")
+    return {"ok": True, "sent_to": to_email}
