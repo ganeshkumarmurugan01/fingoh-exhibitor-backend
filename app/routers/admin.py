@@ -938,7 +938,7 @@ def get_org_addon_totals(db, org_id: str, event_id: str) -> dict:
 # ── Platform email config ─────────────────────────────────────────────────────
 # Stored in the existing email_config table with event_id = '__platform__'
 
-PLATFORM_EMAIL_EVENT_ID = "__platform__"
+PLATFORM_EMAIL_EVENT_ID = "00000000-0000-0000-0000-000000000001"  # sentinel UUID for platform-level config
 
 _DEFAULT_PLATFORM_EMAIL = {
     "event_id":         PLATFORM_EMAIL_EVENT_ID,
