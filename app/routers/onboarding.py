@@ -211,6 +211,14 @@ async def self_signup(payload: SelfSignupPayload):
 
     user_id = r.json()["id"]
 
+    # Trigger Supabase verification email (admin create does not send it automatically)
+    async with httpx.AsyncClient(timeout=15) as client:
+        await client.post(
+            f"{settings.supabase_url}/auth/v1/resend",
+            headers={"apikey": settings.supabase_service_key, "Content-Type": "application/json"},
+            json={"type": "signup", "email": payload.email},
+        )
+
     # Create profile
     db.table("profiles").upsert({
         "id":    user_id,
