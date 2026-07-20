@@ -213,12 +213,11 @@ async def self_signup(payload: SelfSignupPayload):
 
     # Create profile
     db.table("profiles").upsert({
-        "id":      user_id,
-        "org_id":  org_id,
-        "name":    payload.name,
-        "role":    "admin",
-        "title":   "Account Admin",
-        "country": payload.country,
+        "id":    user_id,
+        "org_id": org_id,
+        "name":  payload.name,
+        "role":  "admin",
+        "title": "Account Admin",
     }).execute()
 
     # Send welcome email (best-effort)
