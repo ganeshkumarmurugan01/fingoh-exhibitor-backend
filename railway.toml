@@ -3,3 +3,6 @@ healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
+
+[deploy.requestTimeout]
+timeout = 180
