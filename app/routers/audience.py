@@ -5,27 +5,12 @@ import csv, io, httpx, os, json, asyncio
 from app.database import get_db
 from app.auth import get_current_user, get_user_org
 from app.routers.utils import log_activity
-from app.routers.pharma_intel import get_cached_intel
 
 logger = logging.getLogger("fingoh.audience")
 
 router = APIRouter(prefix="/audience", tags=["audience"])
 
 MODAL_SCORER_URL  = os.getenv("MODAL_SCORER_URL")
-
-# Industry-specific scorer URLs
-MODAL_SCORER_URLS = {
-    "pharma":      os.getenv("MODAL_SCORER_URL_PHARMA"),
-    "electronics": os.getenv("MODAL_SCORER_URL_ELECTRONICS"),
-    "logistics":   os.getenv("MODAL_SCORER_URL_LOGISTICS"),
-    "general":     os.getenv("MODAL_SCORER_URL"),
-}
-MODAL_MEETING_SCORER_URLS = {
-    "pharma":      os.getenv("MODAL_MEETING_SCORER_URL_PHARMA"),
-    "electronics": os.getenv("MODAL_MEETING_SCORER_URL_ELECTRONICS"),
-    "logistics":   os.getenv("MODAL_MEETING_SCORER_URL_LOGISTICS"),
-    "general":     os.getenv("MEETING_SCORER_URL"),
-}
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 
@@ -36,7 +21,6 @@ def _get_event_context(supabase, event_id: str) -> dict:
         return {}
     cats = supabase.table("event_categories").select("category").eq("event_id", event_id).execute()
     icp  = supabase.table("event_icp").select("*").eq("event_id", event_id).maybe_single().execute()
-    intent = supabase.table("event_intent").select("*").eq("event_id", event_id).maybe_single().execute()
     context = ev.data.copy()
     context["categories"] = [c["category"] for c in (cats.data or [])]
     if icp and icp.data:
@@ -47,34 +31,6 @@ def _get_event_context(supabase, event_id: str) -> dict:
         context["roles"]         = []
         context["company_sizes"] = []
         context["visit_reasons"] = []
-    if intent and intent.data:
-        context["intent_why"]     = intent.data.get("why") or ""
-        context["intent_buyers"]  = intent.data.get("buyers") or ""
-        context["intent_signals"] = intent.data.get("signals") or ""
-    else:
-        context["intent_why"]     = ""
-        context["intent_buyers"]  = ""
-        context["intent_signals"] = ""
-
-    # Fetch exhibitor category_master from offerings (with descriptions)
-    try:
-        offerings_res = supabase.table("event_offerings")             .select("category_master")             .eq("event_id", event_id)             .execute()
-        all_cat_ids = []
-        for row in (offerings_res.data or []):
-            cats_json = row.get("category_master") or []
-            if isinstance(cats_json, list):
-                all_cat_ids.extend([c.get("id") for c in cats_json if c.get("id")])
-        # Deduplicate
-        all_cat_ids = list(dict.fromkeys(all_cat_ids))
-        if all_cat_ids:
-            cats_res = supabase.table("category_master")                 .select("id, name, level, description")                 .in_("id", all_cat_ids)                 .execute()
-            context["exhibitor_categories"] = cats_res.data or []
-        else:
-            context["exhibitor_categories"] = []
-    except Exception as e:
-        logger.warning(f"[enrich] Failed to fetch exhibitor categories: {e}")
-        context["exhibitor_categories"] = []
-
     return context
 
 
@@ -169,58 +125,16 @@ def _parse_meeting_interest(val):
     return None
 
 # ── Claude enrichment — extracts signals for one visitor ─────────────────────
-# ── Industry-specific enrichment context ─────────────────────────────────────
-INDUSTRY_CONTEXT = {
-    "pharma": """Industry: Pharmaceutical, Biotech, Pharma Manufacturing, API & Excipients, Medical Devices, Pharma Packaging.
-Key buying signals: regulatory compliance needs, GMP/FDA/EMA/WHO PQ certifications, API sourcing, contract manufacturing, R&D pipeline expansion, serialisation, packaging line upgrades, lab equipment procurement, quality systems, cold chain validation.
-High-intent roles: Head of Procurement, VP Manufacturing, Regulatory Affairs Director, R&D Director, Supply Chain Head, QA/QC Manager, Plant Head, Technical Director.
-Trigger events: new drug approval, facility expansion, USFDA audit findings, patent cliff, biosimilar launch, capacity expansion, new market entry.
-
-COUNTRY REGULATORY INTELLIGENCE (critical for pharma scoring):
-- India: Major generic drug and API manufacturer. Companies export to US/EU/WHO markets. High procurement intent for GMP-compliant materials. Known for price sensitivity but volume buyers. Cross-border preference: buy from EU/US/Japan for compliance, local for cost.
-- USA: FDA 21 CFR compliance non-negotiable. Buyers highly specific in requirements. Long qualification cycles but high-value contracts. Preference: domestic or EU-GMP suppliers.
-- Germany/EU: EMA compliance, strict GMP. Process-oriented buyers with long evaluation cycles. Strong preference for EU-certified suppliers. Reluctant to buy from non-EU unless WHO PQ certified.
-- China: NMPA regulations, large domestic market, API exporter. Growing compliance maturity. Some geopolitical sourcing restrictions from Western buyers.
-- Japan: PMDA regulations, extremely high quality standards, very long evaluation cycles. Preference for domestic or established Western suppliers.
-- Middle East (UAE, Saudi, Egypt): Gulf Pharma Council, SFDA, EDA regulations. Growing local manufacturing. Often buy from India/EU. Strong relationship-driven procurement.
-- Southeast Asia (Thailand, Vietnam, Indonesia, Malaysia): WHO PQ focus, growing generics. Often buy from India/China. Increasing compliance requirements.
-- Brazil: ANVISA regulations, large market, complex import regulations. Prefer suppliers with ANVISA registration or equivalence.
-- Africa: WHO PQ is key. Donors (PEPFAR, Global Fund) often specify suppliers. Price-sensitive but volume buyers.
-
-CROSS-BORDER BUYING PATTERNS:
-- Indian pharma companies buying EU/US-compliant packaging = very high intent (export mandate)
-- EU buyers evaluating Indian API suppliers = high intent but long qualification
-- Middle Eastern buyers sourcing from India = high volume intent
-- Japanese buyers rarely buy from China = geopolitical preference signal
-- US buyers requiring FDA-registered foreign suppliers = very specific intent""",
-
-    "electronics": """Industry: Electronics Manufacturing, Semiconductors, VLSI, PCB, Deep Tech, IoT, Embedded Systems, Defence Electronics.
-Key buying signals: component sourcing, EMS partnerships, semiconductor supply chain, design-in opportunities, prototype evaluation, testing equipment, IP licensing.
-High-intent roles: VP Engineering, Hardware Design Lead, Procurement Manager, CTO, Supply Chain Director, R&D Head, Fab Manager.
-Trigger events: new product launch, chip shortage response, fab expansion, defence contract win, EV/IoT platform development.""",
-
-    "logistics": """Industry: Logistics, Warehousing, Supply Chain, Cold Chain, 3PL, Freight, Last-Mile Delivery, Customs & Trade.
-Key buying signals: WMS/TMS evaluation, automation & robotics, fleet expansion, cold chain infrastructure, customs digitisation, last-mile optimisation.
-High-intent roles: VP Logistics, Supply Chain Director, Warehouse Manager, Chief Supply Chain Officer, Fleet Manager, Operations Head.
-Trigger events: new distribution centre, e-commerce growth, regulatory change, contract renewal, ESG sustainability initiative.""",
-
-    "general": "",
-}
-
 async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncClient) -> dict:
     if not ANTHROPIC_API_KEY:
         return {}
 
-    name        = (visitor.get("name") or visitor.get("Name") or
-                   f'{visitor.get("first_name","") or visitor.get("First Name","")} {visitor.get("last_name","") or visitor.get("Last Name","")}'.strip())
-    title       = (visitor.get("job_title") or visitor.get("Job Title") or
-                   visitor.get("title") or visitor.get("designation") or visitor.get("Designation") or "")
-    company     = visitor.get("company") or visitor.get("Company") or ""
-    country     = visitor.get("country") or visitor.get("Country") or ""
-    reason      = (visitor.get("primary_reason") or visitor.get("Primary Reason") or
-                   visitor.get("reason") or "")
-    categories  = (visitor.get("categories_interest") or visitor.get("Categories of Interest") or
-                   visitor.get("categories") or "")
+    name        = visitor.get("name") or f'{visitor.get("first_name","")} {visitor.get("last_name","")}'.strip()
+    title       = visitor.get("job_title") or visitor.get("title") or visitor.get("designation") or ""
+    company     = visitor.get("company") or ""
+    country     = visitor.get("country") or ""
+    reason      = visitor.get("primary_reason") or visitor.get("reason") or ""
+    categories  = visitor.get("categories_interest") or ""
 
     ex_company   = event_ctx.get("company") or ""
     ex_product   = event_ctx.get("product") or ""
@@ -236,47 +150,8 @@ async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncCli
     )
     ex_intent    = event_ctx.get("intent_why") or ""
     ex_buyers    = event_ctx.get("intent_buyers") or ""
-    ex_signals   = event_ctx.get("intent_signals") or ""
 
-    # Build exhibitor category block with descriptions for prompt
-    exhibitor_cats = event_ctx.get("exhibitor_categories") or []
-    if exhibitor_cats:
-        cat_lines = []
-        for c in exhibitor_cats:
-            desc = f" — {c['description']}" if c.get("description") else ""
-            cat_lines.append(f"  • {c['name']} (L{c.get('level','?')}){desc}")
-        ex_category_block = "Exhibitor product categories (with descriptions):\n" + "\n".join(cat_lines)
-    else:
-        ex_category_block = ""
-
-    # Get cached pharma intel headlines
-    _sb_for_intel = get_db()
-    industry_vertical_for_intel = event_ctx.get("industry_vertical") or "general"
-    intel_block = get_cached_intel(_sb_for_intel, industry=industry_vertical_for_intel) if industry_vertical_for_intel == "pharma" else ""
-
-    # Pharma-specific visitor fields from upload template
-    company_type        = visitor.get("company_type") or visitor.get("Company Type") or ""
-    regulatory_market   = visitor.get("regulatory_market") or visitor.get("Regulatory Market") or ""
-    specific_product    = visitor.get("specific_product_interest") or visitor.get("Specific Product Interest") or ""
-    visit_timeline      = visitor.get("visit_timeline") or visitor.get("Visit Timeline") or ""
-    incumbent_vendor    = visitor.get("incumbent_vendor") or visitor.get("Incumbent Vendor") or ""
-    previous_edition    = visitor.get("previous_edition") or visitor.get("Previous Edition") or ""
-    export_markets      = visitor.get("export_markets") or visitor.get("Export Markets") or ""
-    annual_procurement  = visitor.get("annual_procurement_value") or visitor.get("Annual Procurement Value") or ""
-    linkedin_url        = visitor.get("linkedin_url") or visitor.get("LinkedIn URL") or ""
-
-    industry_vertical = event_ctx.get("industry_vertical") or "general"
-    industry_hint = INDUSTRY_CONTEXT.get(industry_vertical, "")
-    pharma_json_fields = """,
-  "country_regulatory_score": 0.0,
-  "procurement_mandate_score": 0.0,
-  "regulatory_compliance_focus": 0.0,
-  "company_type_match": 0.0,
-  "sourcing_specificity_score": 0.0,
-  "repeat_buyer_potential": 0.0""" if industry_vertical == "pharma" else ""
-
-    prompt = f"""You are an AI analyst for a B2B trade fair intelligence platform specialised in {industry_vertical.upper()} industry intelligence.
-{f"INDUSTRY CONTEXT: {industry_hint}" if industry_hint else ""}
+    prompt = f"""You are an AI analyst for a B2B trade fair intelligence platform.
 
 EXHIBITOR CONTEXT:
 - Company: {ex_company}
@@ -288,9 +163,6 @@ EXHIBITOR CONTEXT:
 - Structural ICP fit (pre-computed from role/size match): {structural_icp:.2f}
 - Exhibitor intent: {ex_intent}
 - Ideal buyer profile: {ex_buyers}
-- Exhibitor intent signals: {ex_signals}
-{f"{ex_category_block}" if ex_category_block else ""}
-{f"{intel_block}" if intel_block else ""}
 
 VISITOR TO ANALYSE:
 - Name: {name}
@@ -298,16 +170,7 @@ VISITOR TO ANALYSE:
 - Company: {company}
 - Country: {country}
 - Declared visit reason: {reason}
-- Categories of interest: {categories}{f"""
-- Company type: {company_type}""" if company_type else ""}{f"""
-- Regulatory markets: {regulatory_market}""" if regulatory_market else ""}{f"""
-- Specific product interest: {specific_product}""" if specific_product else ""}{f"""
-- Purchase timeline: {visit_timeline}""" if visit_timeline else ""}{f"""
-- Export markets: {export_markets}""" if export_markets else ""}{f"""
-- Incumbent vendor: {incumbent_vendor}""" if incumbent_vendor else ""}{f"""
-- Previous edition attendee: {previous_edition}""" if previous_edition else ""}{f"""
-- Annual procurement value: {annual_procurement}""" if annual_procurement else ""}{f"""
-- LinkedIn: {linkedin_url}""" if linkedin_url else ""}
+- Categories of interest: {categories}
 
 Using your knowledge of this person's role, company, and industry context, estimate the following intent signals as decimal values between 0.0 and 1.0.
 
@@ -322,9 +185,7 @@ Respond ONLY with a valid JSON object — no explanation, no markdown:
   "tech_stack_compatibility": 0.0,
   "competitive_displacement": 0.0,
   "profile_completeness": 0.0,
-  "enrichment_notes": "brief reason for scores",
-  "category_match_score": 0.0,
-  "match_reasoning": "brief explanation of category match"{pharma_json_fields}
+  "enrichment_notes": "brief reason for scores"
 }}
 
 Rules:
@@ -332,17 +193,7 @@ Rules:
 - seniority_score: buying authority (1.0 = CEO/CXO, 0.75 = Director/VP, 0.5 = Manager, 0.3 = Analyst)
 - buying_cycle_stage: evidence of active evaluation (1.0 = active RFP/procurement, 0.5 = researching, 0.1 = awareness)
 - trigger_event_score: recent company signals like funding, expansion, new hire (0-1)
-- Be honest — if you have no data, use 0.3 as neutral, not 0.0
-- category_match_score: semantic match between visitor's full context (role, company, declared interests, visit reason, categories of interest) and the exhibitor's product categories with their descriptions. Do NOT do keyword matching — reason about whether this visitor's business need aligns with what the exhibitor offers. 1.0 = perfect fit (visitor clearly needs exactly what exhibitor offers), 0.7 = strong overlap, 0.5 = partial relevance, 0.3 = weak/indirect connection, 0.1 = no apparent match. Use the category descriptions to understand the exhibitor's actual product scope.
-- match_reasoning: 1-2 sentences explaining WHY you gave this category_match_score — what specifically connects (or doesn't connect) this visitor to the exhibitor's categories{"" if industry_vertical != "pharma" else """
-
-PHARMA-SPECIFIC SIGNALS (output these additional fields for pharma events):
-- country_regulatory_score: assess the visitor's country pharma regulatory environment and how it aligns with the exhibitor's products/certifications. Consider: (1) regulatory framework maturity of visitor's country, (2) cross-border buying patterns between visitor's country and exhibitor's country, (3) known sourcing preferences or restrictions of that country's pharma industry, (4) whether visitor's country exports to markets that require exhibitor's compliance standards. Score 0-1 where 1.0 = perfect regulatory/trade alignment.
-- procurement_mandate_score: likelihood of active procurement mandate vs passive evaluation. Consider declared reason, role, company type, company size. 1.0 = active RFP/tender, 0.7 = shortlisting vendors, 0.4 = evaluating options, 0.1 = awareness/browsing.
-- regulatory_compliance_focus: specificity of regulatory compliance interest. 1.0 = declared specific standard (GMP/FDA/WHO PQ), 0.6 = general compliance interest, 0.3 = no compliance signal.
-- company_type_match: how well visitor's company type matches exhibitor's ideal customer. Consider: pharma manufacturer, API producer, CMO/CDMO, packaging company, distributor, hospital/institution. Score based on fit with exhibitor's product.
-- sourcing_specificity_score: how specific is the declared or inferred sourcing need. 1.0 = very specific product/material declared, 0.6 = category declared, 0.3 = general interest, 0.1 = no specificity.
-- repeat_buyer_potential: based on company profile and country, likelihood this represents a recurring/repeat procurement relationship. Large established pharma companies from mature markets = higher. 1.0 = very likely repeat buyer, 0.3 = one-time or unclear."""}"""
+- Be honest — if you have no data, use 0.3 as neutral, not 0.0"""
 
     try:
         resp = await client.post(
@@ -354,7 +205,7 @@ PHARMA-SPECIFIC SIGNALS (output these additional fields for pharma events):
             },
             json={
                 "model": "claude-sonnet-4-6",
-                "max_tokens": 700,
+                "max_tokens": 400,
                 "messages": [{"role": "user", "content": prompt}],
             },
             timeout=25,
@@ -362,106 +213,19 @@ PHARMA-SPECIFIC SIGNALS (output these additional fields for pharma events):
         resp.raise_for_status()
         text = resp.json()["content"][0]["text"]
         # Strip markdown fences if present
-        import re as _re
-        text = text.strip()
-        text = _re.sub(r'^```json\s*', '', text)
-        text = _re.sub(r'^```\s*', '', text)
-        text = _re.sub(r'\s*```$', '', text).strip()
-        # Try direct parse first
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # Extract just the JSON object, truncating any bad tail
-            match = _re.search(r'\{.*\}', text, _re.DOTALL)
-            if match:
-                try:
-                    return json.loads(match.group(0))
-                except Exception:
-                    pass
-            # Last resort: extract numeric fields only
-            result = {}
-            base_keys = ["seniority_score","icp_fit_score","company_size_match","categories_specificity","buying_cycle_stage","trigger_event_score","tech_stack_compatibility","competitive_displacement","profile_completeness","category_match_score"]
-            pharma_keys = ["country_regulatory_score","procurement_mandate_score","regulatory_compliance_focus","company_type_match","sourcing_specificity_score","repeat_buyer_potential"] if industry_vertical == "pharma" else []
-            for key in base_keys + pharma_keys:
-                m = _re.search(rf'"{key}"\s*:\s*([0-9.]+)', text)
-                if m:
-                    result[key] = float(m.group(1))
-            return result if result else {}
+        text = text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        return json.loads(text)
     except Exception as e:
         logger.error("Enrichment failed for %s: %s", name, e)
         return {}
 
 
-
-# ── Junk contact filter — skip enrichment for non-buyers ─────────────────────
-JUNK_DESIGNATIONS = {
-    "student", "intern", "fresher", "trainee", "graduate", "undergraduate",
-    "mba student", "btech", "phd scholar", "phd student", "research scholar",
-    "b.pharm", "m.pharm", "b.tech", "m.tech"
-}
-PERSONAL_EMAIL_DOMAINS = {
-    "gmail.com", "yahoo.com", "yahoo.in", "hotmail.com", "outlook.com",
-    "rediffmail.com", "ymail.com", "live.com", "icloud.com"
-}
-PHARMA_COMPANY_KEYWORDS = {
-    "pharma", "pharmaceutical", "drug", "biotech", "biotechnology",
-    "laboratory", "laboratories", "labs", "life science", "lifescience",
-    "api", "formulation", "cro", "cmo", "clinical", "medical",
-    "healthcare", "health care", "diagnostics", "diagnostic",
-    "chemicals", "chemical", "nutraceutical", "nutra", "generics",
-    "biologics", "biologic", "biopharma", "medtech", "med tech",
-    "research", "sciences", "science", "therapeutics", "oncology",
-    "vaccine", "packaging", "serialization", "manufacturing"
-}
-
-def _is_pharma_company(company: str) -> bool:
-    """Check if company name suggests pharma/life sciences industry."""
-    company_lower = company.lower()
-    return any(kw in company_lower for kw in PHARMA_COMPANY_KEYWORDS)
-JUNK_COMPANY_KEYWORDS = {
-    "university", "college", "school", "institute of technology",
-    "iit ", "nit ", "bits ", "engineering college"
-}
-
-def _is_junk_contact(row: dict) -> tuple[bool, str]:
-    """Returns (is_junk, reason). Junk contacts skip Claude enrichment."""
-    # Check both lowercase and title case keys (CSV vs DB row)
-    designation = (row.get("designation") or row.get("Designation") or
-                   row.get("job_title") or row.get("Job Title") or "").lower().strip()
-    company = (row.get("company") or row.get("Company") or "").lower().strip()
-    email = (row.get("email") or row.get("Email") or "").lower().strip()
-
-    # Missing company
-    if not company or company in ("-", "n/a", "na", "none", "nil"):
-        return True, "missing_company"
-
-    # Student / intern designation
-    for junk in JUNK_DESIGNATIONS:
-        if junk in designation:
-            return True, f"junk_designation:{designation}"
-
-    # Personal email domain — skip unless it's a pharma company
-    if "@" in email:
-        domain = email.split("@")[-1]
-        if domain in PERSONAL_EMAIL_DOMAINS:
-            if not _is_pharma_company(company):
-                return True, f"personal_email_non_pharma:{domain}"
-
-    # Non-pharma institution company
-    for kw in JUNK_COMPANY_KEYWORDS:
-        if kw in company:
-            return True, f"junk_company:{company[:30]}"
-
-    return False, ""
-
 # ── Score batch via Modal XGBoost ─────────────────────────────────────────────
-async def _score_batch(rows: list[dict], industry_vertical: str = "general") -> list[dict]:
-    url = MODAL_SCORER_URLS.get(industry_vertical) or MODAL_SCORER_URL
-    if not url:
+async def _score_batch(rows: list[dict]) -> list[dict]:
+    if not MODAL_SCORER_URL:
         return [{"ieiScore": 50.0, "regProb": 0.5} for _ in rows]
-    logger.info("Scoring %d visitors via %s scorer", len(rows), industry_vertical)
     async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(url, json={"visitors": rows})
+        resp = await client.post(MODAL_SCORER_URL, json={"visitors": rows})
         resp.raise_for_status()
         return resp.json()["scores"]
 
@@ -589,11 +353,7 @@ async def rescore_all(
                 float(row.get("trigger_event_score") or 0.0)) * 0.15
         )
         iei = round(min(100.0, max(0.0, raw * 100)), 1)
-        industry = row.get("industry_vertical", "general")
-        if industry == "pharma":
-            tier = "T1" if iei >= 62 else "T2" if iei >= 44 else "T3" if iei >= 34 else "T4"
-        else:
-            tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
+        tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
         return iei, tier
 
     # Build rows with freshly computed icp_fit_score
@@ -629,26 +389,19 @@ async def rescore_all(
             "tech_stack_compatibility": _f("tech_stack_compatibility"),
             "previous_event_history":   _f("previous_event_history"),
             "profile_completeness":     _f("profile_completeness", 0.5),
-             "categories_specificity":   _f("categories_specificity"),
-            # Pharma signal derivation fields — passed from raw_data/contact
-            "primary_reason":           c.get("primary_reason") or rd.get("primary_reason") or "",
-            "country":                  c.get("country") or rd.get("country") or "",
-            "categories_interest":      c.get("categories_interest") or rd.get("categories_interest") or "",
-            "job_title":                c.get("designation") or rd.get("job_title") or "",
+            "categories_specificity":   _f("categories_specificity"),
             "_contact":                 c,
         })
 
     # Try XGBoost via Modal; fall back to rule-based if unavailable
-    industry_vertical = event_ctx.get("industry_vertical", "general")
-    effective_scorer_url = MODAL_SCORER_URLS.get(industry_vertical) or MODAL_SCORER_URL
-    use_modal = bool(effective_scorer_url)
+    use_modal = bool(MODAL_SCORER_URL)
     BATCH = 20
     scores = []
     if use_modal:
         try:
             modal_rows = [{k: v for k, v in r.items() if k != "_contact"} for r in rows]
             for i in range(0, len(modal_rows), BATCH):
-                batch_scores = await _score_batch(modal_rows[i:i+BATCH], event_ctx.get("industry_vertical","general"))
+                batch_scores = await _score_batch(modal_rows[i:i+BATCH])
                 scores.extend(batch_scores)
         except Exception as e:
             logger.warning("Modal scorer failed during rescore_all, falling back: %s", e)
@@ -665,15 +418,11 @@ async def rescore_all(
         else:
             iei, _ = _rule_based_iei(icp_fit, row)
 
-        industry_vertical = event_ctx.get("industry_vertical", "general")
-        if industry_vertical == "pharma":
-            tier = "T1" if iei >= 62 else "T2" if iei >= 44 else "T3" if iei >= 34 else "T4"
-        else:
-            tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
+        tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
         db.table("audience_contacts").update({
             "icp_fit_score": icp_fit,
             "iei_score":     iei,
-            }).eq("id", c["id"]).execute()
+        }).eq("id", c["id"]).execute()
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
         updated += 1
 
@@ -717,7 +466,6 @@ class RegistrationPayload(_BaseModel):
     preferred_visit_day:       _Optional[str]  = None
     specific_product_interest: _Optional[str]  = None
     categories_interest:       _Optional[str]  = None
-    offerings_interest:        _Optional[list]  = None
     primary_reason:            _Optional[str]  = None
 
 
@@ -778,10 +526,7 @@ def _map_registration_signals(payload: RegistrationPayload, event_date_from: str
         signals["meeting_requests_sent"] = 0.4  # They said yes — not a confirmed request
 
     # ── Declared: Product interest specificity ────────────────────────────
-    if payload.offerings_interest and len(payload.offerings_interest) > 0:
-        # Selected specific offerings = strongest declared product signal
-        signals["categories_specificity"] = min(0.5 + (len(payload.offerings_interest) * 0.1), 0.8)
-    elif payload.specific_product_interest and len(payload.specific_product_interest) > 5:
+    if payload.specific_product_interest and len(payload.specific_product_interest) > 5:
         signals["categories_specificity"] = 0.5  # Specific = slightly higher
     elif payload.categories_interest:
         signals["categories_specificity"] = 0.3
@@ -839,7 +584,6 @@ async def register_visitor(event_id: str, payload: RegistrationPayload):
         raw["wants_meeting"] = payload.wants_meeting
         raw["preferred_visit_day"] = payload.preferred_visit_day
         raw["specific_product_interest"] = payload.specific_product_interest
-        raw["offerings_interest"] = payload.offerings_interest or []
         raw["visited_booth_last_year"] = payload.visited_booth_last_year
         raw["had_meeting_last_year"] = payload.had_meeting_last_year
         raw["purchase_timeline"] = payload.purchase_timeline
@@ -860,7 +604,6 @@ async def register_visitor(event_id: str, payload: RegistrationPayload):
         raw["wants_meeting"] = payload.wants_meeting
         raw["preferred_visit_day"] = payload.preferred_visit_day
         raw["specific_product_interest"] = payload.specific_product_interest
-        raw["offerings_interest"] = payload.offerings_interest or []
         raw["visited_booth_last_year"] = payload.visited_booth_last_year
         raw["had_meeting_last_year"] = payload.had_meeting_last_year
         raw["purchase_timeline"] = payload.purchase_timeline
@@ -923,7 +666,7 @@ async def register_visitor(event_id: str, payload: RegistrationPayload):
         "previous_event_history":   safe(merged_signals.get("previous_event_history"), 0.0),
     }
 
-    scores = await _score_batch([score_row], event_ctx.get("industry_vertical", "general"))
+    scores = await _score_batch([score_row])
     new_iei = float(full.get("iei_score") or 43)
     new_reg = float(full.get("reg_prob") or 0.43)
     if scores:
@@ -950,26 +693,17 @@ def get_registration_info(event_id: str):
     """Public endpoint — returns event + exhibitor info for the registration form."""
     db = get_db()
     ev = db.table("events").select(
-        "id, name, company, product, date_from, date_to, venue, country, logo_url, banner_url, linkedin_url"
-    ).eq("id", event_id).limit(1).execute()
+        "id, name, company, product, date_from, date_to, venue, country"
+    ).eq("id", event_id).maybe_single().execute()
     if not ev or not ev.data:
         raise HTTPException(status_code=404, detail="Event not found")
-    ev_data = ev.data[0]
 
     cats = db.table("event_categories").select("category").eq("event_id", event_id).execute()
     categories = [c["category"] for c in (cats.data or [])]
 
-    icp = db.table("event_icp").select("roles, company_sizes, visit_reasons").eq("event_id", event_id).limit(1).execute()
-    intent = db.table("event_intent").select("intent_why, intent_buyers").eq("event_id", event_id).limit(1).execute()
-
     return {
-        **ev_data,
+        **ev.data,
         "categories": categories,
-        "icp_roles":         (icp.data[0] if icp.data else {}).get("roles") or [],
-        "icp_company_sizes": (icp.data[0] if icp.data else {}).get("company_sizes") or [],
-        "icp_visit_reasons": (icp.data[0] if icp.data else {}).get("visit_reasons") or [],
-        "intent_why":        (intent.data[0] if intent.data else {}).get("intent_why") or "",
-        "intent_buyers":     (intent.data[0] if intent.data else {}).get("intent_buyers") or "",
     }
 
 
@@ -1003,7 +737,7 @@ async def rescore_one(event_id: str, email: str):
         "categories_specificity":   safe(raw.get("categories_specificity"), 0.0),
         "profile_completeness":     safe(raw.get("profile_completeness"), 0.5),
     }
-    scores = await _score_batch([row], event_ctx.get("industry_vertical", "general"))
+    scores = await _score_batch([row])
     if scores:
         iei  = round(float(scores[0].get("ieiScore", 43)), 2)
         reg  = round(float(scores[0].get("regProb", 0.43)), 4)
@@ -1075,60 +809,14 @@ async def upload_audience(
     supabase = get_db()
 
     content = await file.read()
-    filename = (file.filename or "").lower()
-    logger.info("Upload attempt: filename=%s, content_type=%s, size=%d", filename, file.content_type, len(content))
     try:
-        if filename.endswith(".xlsx") or filename.endswith(".xls"):
-            import openpyxl, io as _io
-            wb = openpyxl.load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
-            ws = wb.active
-            headers = [str(c.value or "").strip() for c in next(ws.iter_rows(min_row=1, max_row=1))]
-            rows = []
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                rows.append({headers[i]: (str(v).strip() if v is not None else "") for i, v in enumerate(row)})
-            wb.close()
-        else:
-            # Try UTF-8 first, fall back to latin-1 for files with special characters
-            try:
-                text = content.decode("utf-8-sig")
-            except UnicodeDecodeError:
-                text = content.decode("latin-1")
-            reader = csv.DictReader(io.StringIO(text))
-            rows = list(reader)
-    except Exception as e:
-        raise HTTPException(400, f"Could not parse file: {e}")
+        reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
+        rows = list(reader)
+    except Exception:
+        raise HTTPException(400, "Could not parse CSV")
 
     if not rows:
         raise HTTPException(400, "Empty CSV")
-
-    # Validate mandatory fields — reject rows missing name and company
-    valid_rows = []
-    rejected_rows = []
-    for row in rows:
-        name = _get(row, "name") or f'{_get(row, "first_name") or ""} {_get(row, "last_name") or ""}'.strip()
-        company = _get(row, "company")
-        email = _get(row, "email")
-        missing = []
-        if not name:
-            missing.append("name")
-        if not company:
-            missing.append("company")
-        if not email:
-            missing.append("email")
-        if missing:
-            rejected_rows.append({"row": row, "missing": missing})
-            continue
-        # Exclude contacts with personal email AND no company — pure junk
-        no_company = not company or company.strip() in ("-", "n/a", "na", "none", "nil", "")
-        if no_company:
-            # Check if personal email with no company
-            email_val = _get(row, "email") or ""
-            domain = email_val.split("@")[-1].lower() if "@" in email_val else ""
-            if domain in PERSONAL_EMAIL_DOMAINS:
-                rejected_rows.append({"row": row, "missing": ["personal_email_no_company"]})
-                continue
-        valid_rows.append(row)
-    rows = valid_rows
 
     # ── Enforce contact cap for this org's plan ──────────────────────────────
     from app.auth import get_user_org
@@ -1147,12 +835,24 @@ async def upload_audience(
         rows = rows[:remaining]
         logger.warning("Upload truncated to %d rows (plan limit %d, existing %d)", remaining, max_contacts, existing_count)
 
-    # Fetch exhibitor context for this event (needed for background enrichment)
+    # Fetch exhibitor context for this event
     event_ctx = _get_event_context(supabase, event_id)
 
-    # Save immediately with default scores — background task handles scoring+enrichment
-    enriched_rows = rows
-    scored = [{"ieiScore": 0.0, "regProb": 0.0} for _ in rows]
+    # Enrich each visitor with Claude (parallel, max 5 concurrent)
+    enriched_rows = []
+    if ANTHROPIC_API_KEY:
+        async with httpx.AsyncClient() as client:
+            sem = asyncio.Semaphore(5)
+            async def enrich_one(row):
+                async with sem:
+                    signals = await _enrich_visitor(row, event_ctx, client)
+                    return {**row, **signals}
+            enriched_rows = await asyncio.gather(*[enrich_one(r) for r in rows])
+    else:
+        enriched_rows = rows
+
+    # Score with XGBoost via Modal
+    scored = await _score_batch(enriched_rows)
 
     # ── Apply historical boost from previous edition ───────────────────────
     # Fetch previous_event_id for this event
@@ -1184,127 +884,21 @@ async def upload_audience(
             "reg_prob":    s["regProb"],
             "scored_at":   "now()",
             "meeting_interest": _parse_meeting_interest(_get(r, "meeting_interest")),
-            "enrichment_status": "pending",
         }
         for r, s in zip(enriched_rows, scored)
     ]
-
-    # Check which emails already exist and are enriched — don't reset their status
-    emails = [r.get("email","") for r in records if r.get("email")]
-    existing_res = supabase.table("audience_contacts")         .select("email, enrichment_status")         .eq("event_id", event_id)         .in_("email", emails)         .execute()
-    already_enriched = {
-        r["email"] for r in (existing_res.data or [])
-        if r.get("enrichment_status") in ("done", "skipped")
-    }
-
-    # For already-enriched contacts, don't reset enrichment_status
-    for rec in records:
-        if rec.get("email") in already_enriched:
-            rec["enrichment_status"] = "done"  # keep as done, won't re-enrich
 
     supabase.table("audience_contacts").upsert(
         records, on_conflict="event_id,email"
     ).execute()
 
-    # ── Background enrichment in batches of 50 ───────────────────────────────
-    async def enrich_in_background():
-        BATCH = 50
-        try:
-            ctx = _get_event_context(supabase, event_id)
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                while True:
-                    # Kill switch check
-                    ev_check = supabase.table("events").select("enrichment_paused").eq("id", event_id).maybe_single().execute()
-                    if ev_check and ev_check.data and ev_check.data.get("enrichment_paused"):
-                        logger.info("Enrichment paused for event %s", event_id)
-                        break
-
-                    # Fetch next pending batch
-                    batch_res = supabase.table("audience_contacts")                         .select("*")                         .eq("event_id", event_id)                         .eq("enrichment_status", "pending")                         .limit(BATCH)                         .execute()
-                    batch = batch_res.data or []
-                    if not batch:
-                        logger.info("Enrichment complete for event %s", event_id)
-                        break
-
-                    # Mark batch as enriching
-                    ids = [c["id"] for c in batch]
-                    supabase.table("audience_contacts").update({"enrichment_status": "enriching"}).in_("id", ids).execute()
-
-                    sem = asyncio.Semaphore(5)
-                    async def enrich_one(contact):
-                        async with sem:
-                            try:
-                                raw = contact.get("raw_data") or {}
-                                # Merge DB fields into raw so junk filter has fallback
-                                row = {
-                                    "company": contact.get("company") or raw.get("company") or raw.get("Company") or "",
-                                    "designation": contact.get("designation") or raw.get("designation") or raw.get("Designation") or raw.get("job_title") or "",
-                                    "email": contact.get("email") or raw.get("email") or raw.get("Email") or "",
-                                    **raw,
-                                }
-                                # Junk filter — skip students, personal emails, missing company
-                                is_junk, junk_reason = _is_junk_contact(row)
-                                if is_junk:
-                                    logger.info("Skipping junk contact %s: %s", contact.get("email"), junk_reason)
-                                    supabase.table("audience_contacts").update({
-                                        "enrichment_status": "skipped",
-                                        "raw_data": {**(contact.get("raw_data") or {}), "junk_reason": junk_reason}
-                                    }).eq("id", contact["id"]).execute()
-                                    return
-                                # Claude enrichment
-                                signals = await _enrich_visitor(row, ctx, client)
-                                merged_raw = {**(contact.get("raw_data") or {}), **signals}
-                                # Rescore with enriched signals
-                                score_row = {
-                                    "id": contact["id"],
-                                    "job_title": contact.get("designation") or "",
-                                    "icp_fit_score": compute_icp_fit(contact.get("designation") or "", "", ctx),
-                                    **{k: float(signals.get(k, 0) or 0) for k in [
-                                        "buying_cycle_stage", "trigger_event_score",
-                                        "meeting_requests_sent", "previous_event_history",
-                                        "categories_specificity", "profile_completeness",
-                                        "category_match_score",
-                                    ]},
-                                }
-                                new_scores = await _score_batch([score_row], ctx.get("industry_vertical", "general"))
-                                new_iei = round(float(new_scores[0].get("ieiScore", contact.get("iei_score", 43))), 2) if new_scores else contact.get("iei_score", 43)
-                                new_reg = round(float(new_scores[0].get("regProb", contact.get("reg_prob", 0.43))), 4) if new_scores else contact.get("reg_prob", 0.43)
-                                # Compute tier using industry-correct thresholds
-                                _industry = ctx.get("industry_vertical", "general")
-                                if _industry == "pharma":
-                                    _tier = "T1" if new_iei >= 62 else "T2" if new_iei >= 44 else "T3" if new_iei >= 34 else "T4"
-                                else:
-                                    _tier = "T1" if new_iei >= 75 else "T2" if new_iei >= 50 else "T3" if new_iei >= 25 else "T4"
-                                supabase.table("audience_contacts").update({
-                                    "raw_data": merged_raw,
-                                    "iei_score": new_iei,
-                                    "reg_prob": new_reg,
-                                    "enrichment_status": "done",
-                                    "category_match_score": float(signals.get("category_match_score") or 0.0),
-                                    "match_reasoning": signals.get("match_reasoning") or "",
-                                }).eq("id", contact["id"]).execute()
-                            except Exception as e:
-                                logger.warning("Enrichment failed for %s: %s", contact.get("email"), e)
-                                supabase.table("audience_contacts").update({"enrichment_status": "failed"}).eq("id", contact["id"]).execute()
-
-                    await asyncio.gather(*[enrich_one(c) for c in batch])
-                    logger.info("Enriched batch of %d for event %s", len(batch), event_id)
-                    await asyncio.sleep(1)
-        except Exception as e:
-            logger.error("Background enrichment crashed for event %s: %s", event_id, e)
-
-    asyncio.create_task(enrich_in_background())
-
     log_activity(get_db(), get_user_org(current_user["user_id"], get_db()), "contacts_uploaded", f"Uploaded {len(records)} contacts", current_user["user_id"], {"count": len(records), "event_id": event_id})
     return {
         "uploaded":    len(records),
-        "rejected":    len(rejected_rows),
-        "rejected_details": [{"missing": r["missing"]} for r in rejected_rows[:10]],
         "event_id":    event_id,
         "plan_limit":  max_contacts,
         "used_after":  existing_count + len(records),
-        "truncated":   len(rows) < (existing_count + len(records)),
-        "enrichment":  "queued",
+        "truncated":   len(rows) < (existing_count + len(records)),  # True if we cut rows
     }
 
 
@@ -1542,7 +1136,7 @@ Respond ONLY with valid JSON (no markdown):
         raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
 
     try:
-        async with httpx.AsyncClient(timeout=175) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={
@@ -2071,7 +1665,6 @@ async def delete_contact(
     db.table("agent_outputs").delete().eq("contact_id", contact_id).eq("event_id", event_id).execute()
     meeting_ids = [m["id"] for m in (db.table("meeting_requests").select("id").eq("contact_id", contact_id).eq("event_id", event_id).execute().data or [])]
     if meeting_ids:
-        db.table("meeting_tokens").delete().in_("meeting_id", meeting_ids).execute()
         db.table("meeting_requests").delete().in_("id", meeting_ids).execute()
     db.table("audience_contacts").delete().eq("id", contact_id).eq("event_id", event_id).execute()
 
@@ -2294,167 +1887,3 @@ async def save_walk_in(payload: WalkInSaveRequest):
     }).execute()
 
     return {"ok": True, "contact_id": contact_id, "created": not bool(existing)}
-
-# force-redeploy: logo_url banner_url icp intent
-
-
-# ── Enrichment kill switch + status ──────────────────────────────────────────
-@router.post("/enrich/pause/{event_id}")
-async def pause_enrichment(event_id: str, current_user: dict = Depends(get_current_user)):
-    db = get_db()
-    org_id = get_user_org(current_user["user_id"], db)
-    ev = db.table("events").select("org_id").eq("id", event_id).eq("org_id", org_id).maybe_single().execute()
-    if not ev or not ev.data:
-        raise HTTPException(403, "Not authorised")
-    db.table("events").update({"enrichment_paused": True}).eq("id", event_id).execute()
-    return {"paused": True}
-
-@router.post("/enrich/resume/{event_id}")
-async def resume_enrichment(event_id: str, current_user: dict = Depends(get_current_user)):
-    db = get_db()
-    org_id = get_user_org(current_user["user_id"], db)
-    ev = db.table("events").select("org_id").eq("id", event_id).eq("org_id", org_id).maybe_single().execute()
-    if not ev or not ev.data:
-        raise HTTPException(403, "Not authorised")
-    db.table("events").update({"enrichment_paused": False}).eq("id", event_id).execute()
-    return {"resumed": True}
-
-@router.get("/enrich/status/{event_id}")
-async def enrichment_status(event_id: str, current_user: dict = Depends(get_current_user), since: str = None):
-    """Get enrichment progress. Pass since=ISO_TIMESTAMP to filter to current upload only."""
-    db = get_db()
-    def q(status=None):
-        base = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id)
-        if since:
-            base = base.gte("scored_at", since)
-        if status:
-            base = base.eq("enrichment_status", status)
-        return base.execute()
-
-    total    = q()
-    done     = q("done")
-    pending  = q("pending")
-    enriching= q("enriching")
-    failed   = q("failed")
-    skipped  = q("skipped")
-    ev       = db.table("events").select("enrichment_paused").eq("id", event_id).maybe_single().execute()
-    return {
-        "total":     total.count or 0,
-        "done":      done.count or 0,
-        "pending":   pending.count or 0,
-        "enriching": enriching.count or 0,
-        "failed":    failed.count or 0,
-        "skipped":   skipped.count or 0,
-        "paused":    (ev.data or {}).get("enrichment_paused", False),
-    }
-
-
-# ── Force enrich a single contact (bypasses junk filter) ─────────────────────
-@router.post("/enrich-one/{event_id}/{contact_id}")
-async def force_enrich_one(event_id: str, contact_id: str, current_user: dict = Depends(get_current_user)):
-    """Force Claude enrichment + rescore for a single contact, bypassing junk filter."""
-    db = get_db()
-    org_id = get_user_org(current_user["user_id"], db)
-    ev = db.table("events").select("org_id").eq("id", event_id).eq("org_id", org_id).maybe_single().execute()
-    if not ev or not ev.data:
-        raise HTTPException(403, "Not authorised")
-
-    contact = db.table("audience_contacts").select("*").eq("id", contact_id).eq("event_id", event_id).maybe_single().execute()
-    if not contact or not contact.data:
-        raise HTTPException(404, "Contact not found")
-
-    c = contact.data
-    ctx = _get_event_context(db, event_id)
-    row = c.get("raw_data") or {}
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            signals = await _enrich_visitor(row, ctx, client)
-        except Exception as e:
-            raise HTTPException(500, f"Enrichment failed: {e}")
-
-    merged_raw = {**row, **signals}
-    score_row = {
-        "id": contact_id,
-        "job_title": c.get("designation") or "",
-        "icp_fit_score": compute_icp_fit(c.get("designation") or "", "", ctx),
-        **{k: float(signals.get(k, 0) or 0) for k in [
-            "buying_cycle_stage", "trigger_event_score",
-            "meeting_requests_sent", "previous_event_history",
-            "categories_specificity", "profile_completeness",
-            "category_match_score",
-        ]},
-    }
-    scores = await _score_batch([score_row], ctx.get("industry_vertical", "general"))
-    new_iei = round(float(scores[0].get("ieiScore", 43)), 2) if scores else 43.0
-    new_reg = round(float(scores[0].get("regProb", 0.43)), 4) if scores else 0.43
-
-    # Compute tier using industry-correct thresholds
-    _industry = ctx.get("industry_vertical", "general")
-    if _industry == "pharma":
-        _tier = "T1" if new_iei >= 62 else "T2" if new_iei >= 44 else "T3" if new_iei >= 34 else "T4"
-    else:
-        _tier = "T1" if new_iei >= 75 else "T2" if new_iei >= 50 else "T3" if new_iei >= 25 else "T4"
-    db.table("audience_contacts").update({
-        "raw_data": merged_raw,
-        "iei_score": new_iei,
-        "reg_prob": new_reg,
-        "enrichment_status": "done",
-        "category_match_score": float(signals.get("category_match_score") or 0.0),
-        "match_reasoning": signals.get("match_reasoning") or "",
-    }).eq("id", contact_id).execute()
-
-    return {"iei_score": new_iei, "iei_tier": _tier, "reg_prob": new_reg, "contact_id": contact_id}
-
-
-# ── Voice transcription endpoint ──────────────────────────────────────────────
-@router.post("/transcribe-voice")
-async def transcribe_voice(payload: dict):
-    """
-    Transcribe voice recording from Staff App.
-    Accepts base64 audio, uses Claude to transcribe + summarise.
-    No auth required — scoped by event_id + contact_id.
-    """
-    import anthropic, base64, os
-
-    audio_b64   = payload.get("audio_base64", "")
-    mime_type   = payload.get("mime_type", "audio/webm")
-    event_id    = payload.get("event_id", "")
-    contact_id  = payload.get("contact_id")
-    contact_name= payload.get("contact_name", "visitor")
-
-    if not audio_b64:
-        raise HTTPException(status_code=400, detail="No audio provided")
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="API key not configured")
-
-    try:
-        # Note: Claude does not support audio transcription directly.
-        # Audio blobs from offline recordings are stored here for future
-        # processing via Whisper or similar service.
-        # For now, store the recording metadata and return a pending status.
-        
-        if contact_id:
-            try:
-                db = get_db()
-                db.table("conversation_signals").insert({
-                    "contact_id":       contact_id,
-                    "event_id":         event_id,
-                    "voice_transcript": "[Voice note recorded offline — pending transcription]",
-                    "logged_by":        "staff_voice_offline",
-                    "notes":            "[Voice recorded offline]",
-                }).execute()
-            except Exception as e:
-                logger.warning(f"[transcribe_voice] signal save error: {e}")
-
-        return {
-            "transcript": "[Voice note saved — transcription service coming soon]",
-            "contact_id": contact_id,
-            "status": "saved"
-        }
-
-    except Exception as e:
-        logger.error(f"[transcribe_voice] error: {e}")
-        raise HTTPException(status_code=500, detail=f"Voice save failed: {str(e)}")
