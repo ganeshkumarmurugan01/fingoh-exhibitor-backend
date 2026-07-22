@@ -4,7 +4,7 @@ from app.database import get_db
 from typing import Optional
 from pydantic import BaseModel
 
-router = APIRouter(prefix="/api/v1/offerings", tags=["offerings"])
+router = APIRouter(prefix="/offerings", tags=["offerings"])
 
 class OfferingCreate(BaseModel):
     type: str
