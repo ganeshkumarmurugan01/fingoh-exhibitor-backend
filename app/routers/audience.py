@@ -1141,23 +1141,30 @@ Respond ONLY with valid JSON (no markdown):
     if not ANTHROPIC_API_KEY:
         raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 4000,
-                "tools": [{"type": "web_search_20250305", "name": "web_search"}],
-                "messages": [{"role": "user", "content": prompt}],
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    try:
+        async with httpx.AsyncClient(timeout=175) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 4000,
+                    "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            if not resp.is_success:
+                err_body = resp.text[:500]
+                logger.error("Anthropic API error %s: %s", resp.status_code, err_body)
+                raise HTTPException(502, f"AI service error ({resp.status_code}): {err_body}")
+            data = resp.json()
+    except httpx.TimeoutException as e:
+        logger.error("Anthropic request timed out: %s", e)
+        raise HTTPException(504, "AI research timed out — please try again")
 
     # Extract text from content blocks
     text = ""
