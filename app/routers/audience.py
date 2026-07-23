@@ -466,6 +466,7 @@ class RegistrationPayload(_BaseModel):
     preferred_visit_day:       _Optional[str]  = None
     specific_product_interest: _Optional[str]  = None
     categories_interest:       _Optional[str]  = None
+    offerings_interest:        _Optional[list]  = None
     primary_reason:            _Optional[str]  = None
 
 
@@ -526,7 +527,10 @@ def _map_registration_signals(payload: RegistrationPayload, event_date_from: str
         signals["meeting_requests_sent"] = 0.4  # They said yes — not a confirmed request
 
     # ── Declared: Product interest specificity ────────────────────────────
-    if payload.specific_product_interest and len(payload.specific_product_interest) > 5:
+    if payload.offerings_interest and len(payload.offerings_interest) > 0:
+        # Selected specific offerings = strongest declared product signal
+        signals["categories_specificity"] = min(0.5 + (len(payload.offerings_interest) * 0.1), 0.8)
+    elif payload.specific_product_interest and len(payload.specific_product_interest) > 5:
         signals["categories_specificity"] = 0.5  # Specific = slightly higher
     elif payload.categories_interest:
         signals["categories_specificity"] = 0.3
@@ -584,6 +588,7 @@ async def register_visitor(event_id: str, payload: RegistrationPayload):
         raw["wants_meeting"] = payload.wants_meeting
         raw["preferred_visit_day"] = payload.preferred_visit_day
         raw["specific_product_interest"] = payload.specific_product_interest
+        raw["offerings_interest"] = payload.offerings_interest or []
         raw["visited_booth_last_year"] = payload.visited_booth_last_year
         raw["had_meeting_last_year"] = payload.had_meeting_last_year
         raw["purchase_timeline"] = payload.purchase_timeline
@@ -604,6 +609,7 @@ async def register_visitor(event_id: str, payload: RegistrationPayload):
         raw["wants_meeting"] = payload.wants_meeting
         raw["preferred_visit_day"] = payload.preferred_visit_day
         raw["specific_product_interest"] = payload.specific_product_interest
+        raw["offerings_interest"] = payload.offerings_interest or []
         raw["visited_booth_last_year"] = payload.visited_booth_last_year
         raw["had_meeting_last_year"] = payload.had_meeting_last_year
         raw["purchase_timeline"] = payload.purchase_timeline
