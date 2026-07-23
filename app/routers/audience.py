@@ -1141,25 +1141,6 @@ Respond ONLY with valid JSON (no markdown):
     if not ANTHROPIC_API_KEY:
         raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
 
-<<<<<<< Updated upstream
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 4000,
-                "tools": [{"type": "web_search_20250305", "name": "web_search"}],
-                "messages": [{"role": "user", "content": prompt}],
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-=======
     try:
         async with httpx.AsyncClient(timeout=175) as client:
             resp = await client.post(
@@ -1184,7 +1165,6 @@ Respond ONLY with valid JSON (no markdown):
     except httpx.TimeoutException as e:
         logger.error("Anthropic request timed out: %s", e)
         raise HTTPException(504, "AI research timed out — please try again")
->>>>>>> Stashed changes
 
     # Extract text from content blocks
     text = ""
