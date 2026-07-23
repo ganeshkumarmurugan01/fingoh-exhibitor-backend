@@ -24,6 +24,13 @@ class OfferingUpdate(BaseModel):
     target_industries: Optional[list[str]] = None
     display_order: Optional[int] = None
 
+@router.get("/event/{event_id}/public")
+def get_event_offerings_public(event_id: str):
+    """Public endpoint for visitor registration - no auth required"""
+    db = get_db()
+    result = db.table("event_offerings").select("*").eq("event_id", event_id).order("display_order").execute()
+    return result.data or []
+
 @router.get("/event/{event_id}")
 def get_event_offerings(event_id: str, current_user: dict = Depends(get_current_user)):
     db = get_db()
@@ -33,13 +40,11 @@ def get_event_offerings(event_id: str, current_user: dict = Depends(get_current_
 @router.post("/event/{event_id}")
 def create_offering(event_id: str, payload: OfferingCreate, current_user: dict = Depends(get_current_user)):
     db = get_db()
-    # Get org_id from profile
     profile = db.table("profiles").select("org_id").eq("id", current_user["user_id"]).maybe_single().execute()
     if not profile or not profile.data:
         raise HTTPException(status_code=404, detail="Profile not found")
     org_id = profile.data["org_id"]
 
-    # Check offering count (max 5 per event)
     count_res = db.table("event_offerings").select("id", count="exact").eq("event_id", event_id).execute()
     if count_res.count and count_res.count >= 5:
         raise HTTPException(status_code=400, detail="Maximum 5 offerings per event")
@@ -66,10 +71,3 @@ def delete_offering(offering_id: str, current_user: dict = Depends(get_current_u
     db = get_db()
     db.table("event_offerings").delete().eq("id", offering_id).execute()
     return {"ok": True}
-
-@router.get("/event/{event_id}/public")
-def get_event_offerings_public(event_id: str):
-    """Public endpoint for visitor registration - no auth required"""
-    db = get_db()
-    result = db.table("event_offerings").select("*").eq("event_id", event_id).order("display_order").execute()
-    return result.data or []
