@@ -36,7 +36,7 @@ class EventCreate(BaseModel):
 
     # Step 2 — Company & booth
     company: str = Field(..., min_length=1, max_length=200)
-    product: str = Field(..., min_length=1, max_length=500)
+    product: Optional[str] = None
     website: Optional[str] = None
     booth_size: Optional[str] = None
 
