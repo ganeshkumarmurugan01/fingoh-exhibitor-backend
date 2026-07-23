@@ -9,7 +9,7 @@ router = APIRouter(prefix="/offerings", tags=["offerings"])
 class OfferingCreate(BaseModel):
     type: str
     name: str
-    category: Optional[str] = None
+    category: Optional[list[str]] = None
     short_description: Optional[str] = None
     key_specifications: Optional[list[str]] = []
     target_industries: Optional[list[str]] = []
@@ -18,7 +18,7 @@ class OfferingCreate(BaseModel):
 class OfferingUpdate(BaseModel):
     type: Optional[str] = None
     name: Optional[str] = None
-    category: Optional[str] = None
+    category: Optional[list[str]] = None
     short_description: Optional[str] = None
     key_specifications: Optional[list[str]] = None
     target_industries: Optional[list[str]] = None
