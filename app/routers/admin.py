@@ -253,7 +253,10 @@ async def update_customer(
     old_res = db.table("organisations").select("plan,status,name").eq("id", org_id).maybe_single().execute()
     old = old_res.data or {}
 
-    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    updates = {k: (None if k == "subscription_expires_at" and v == "" else v) for k, v in payload.model_dump().items() if v is not None}
+    # Coerce empty expiry date to None
+    if "subscription_expires_at" in updates and updates["subscription_expires_at"] == "":
+        updates["subscription_expires_at"] = None
     if not updates:
         raise HTTPException(400, "No fields to update")
 
