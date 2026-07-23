@@ -56,8 +56,13 @@ def get_plan_info(current_user: dict = Depends(get_current_user)):
     max_events    = base_max + extra_events
     active_count  = db.table("events").select("id", count="exact").eq("org_id", org_id).neq("status", "archived").execute()
     active_events = active_count.count or 0
-    total_contacts = db.table("audience_contacts").select("id", count="exact").eq("org_id", org_id).execute()
-    total_contacts_count = total_contacts.count or 0
+    # Get all event IDs for this org, then count contacts
+    org_events = db.table("events").select("id").eq("org_id", org_id).execute()
+    org_event_ids = [e["id"] for e in (org_events.data or [])]
+    total_contacts_count = 0
+    if org_event_ids:
+        total_contacts = db.table("audience_contacts").select("id", count="exact").in_("event_id", org_event_ids).execute()
+        total_contacts_count = total_contacts.count or 0
     return {
         "plan":                    plan,
         "max_events":              max_events,
