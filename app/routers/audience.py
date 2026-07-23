@@ -466,6 +466,7 @@ class RegistrationPayload(_BaseModel):
     preferred_visit_day:       _Optional[str]  = None
     specific_product_interest: _Optional[str]  = None
     categories_interest:       _Optional[str]  = None
+    offerings_interest:        _Optional[list]  = None
     primary_reason:            _Optional[str]  = None
 
 
@@ -584,6 +585,7 @@ async def register_visitor(event_id: str, payload: RegistrationPayload):
         raw["wants_meeting"] = payload.wants_meeting
         raw["preferred_visit_day"] = payload.preferred_visit_day
         raw["specific_product_interest"] = payload.specific_product_interest
+        raw["offerings_interest"] = payload.offerings_interest or []
         raw["visited_booth_last_year"] = payload.visited_booth_last_year
         raw["had_meeting_last_year"] = payload.had_meeting_last_year
         raw["purchase_timeline"] = payload.purchase_timeline
@@ -604,6 +606,7 @@ async def register_visitor(event_id: str, payload: RegistrationPayload):
         raw["wants_meeting"] = payload.wants_meeting
         raw["preferred_visit_day"] = payload.preferred_visit_day
         raw["specific_product_interest"] = payload.specific_product_interest
+        raw["offerings_interest"] = payload.offerings_interest or []
         raw["visited_booth_last_year"] = payload.visited_booth_last_year
         raw["had_meeting_last_year"] = payload.had_meeting_last_year
         raw["purchase_timeline"] = payload.purchase_timeline
