@@ -815,11 +815,22 @@ async def upload_audience(
     supabase = get_db()
 
     content = await file.read()
+    filename = (file.filename or "").lower()
     try:
-        reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
-        rows = list(reader)
-    except Exception:
-        raise HTTPException(400, "Could not parse CSV")
+        if filename.endswith(".xlsx") or filename.endswith(".xls"):
+            import openpyxl, io as _io
+            wb = openpyxl.load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
+            ws = wb.active
+            headers = [str(c.value or "").strip() for c in next(ws.iter_rows(min_row=1, max_row=1))]
+            rows = []
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                rows.append({headers[i]: (str(v).strip() if v is not None else "") for i, v in enumerate(row)})
+            wb.close()
+        else:
+            reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
+            rows = list(reader)
+    except Exception as e:
+        raise HTTPException(400, f"Could not parse file: {e}")
 
     if not rows:
         raise HTTPException(400, "Empty CSV")
