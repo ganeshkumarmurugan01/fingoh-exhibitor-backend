@@ -849,7 +849,12 @@ async def upload_audience(
                 rows.append({headers[i]: (str(v).strip() if v is not None else "") for i, v in enumerate(row)})
             wb.close()
         else:
-            reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
+            # Try UTF-8 first, fall back to latin-1 for files with special characters
+            try:
+                text = content.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text = content.decode("latin-1")
+            reader = csv.DictReader(io.StringIO(text))
             rows = list(reader)
     except Exception as e:
         raise HTTPException(400, f"Could not parse file: {e}")
