@@ -213,8 +213,29 @@ Rules:
         resp.raise_for_status()
         text = resp.json()["content"][0]["text"]
         # Strip markdown fences if present
-        text = text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        return json.loads(text)
+        import re as _re
+        text = text.strip()
+        text = _re.sub(r'^```json\s*', '', text)
+        text = _re.sub(r'^```\s*', '', text)
+        text = _re.sub(r'\s*```$', '', text).strip()
+        # Try direct parse first
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # Extract just the JSON object, truncating any bad tail
+            match = _re.search(r'\{.*\}', text, _re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(0))
+                except Exception:
+                    pass
+            # Last resort: extract numeric fields only
+            result = {}
+            for key in ["seniority_score","icp_fit_score","company_size_match","categories_specificity","buying_cycle_stage","trigger_event_score","tech_stack_compatibility","competitive_displacement","profile_completeness"]:
+                m = _re.search(rf'"{key}"\s*:\s*([0-9.]+)', text)
+                if m:
+                    result[key] = float(m.group(1))
+            return result if result else {}
     except Exception as e:
         logger.error("Enrichment failed for %s: %s", name, e)
         return {}
