@@ -858,11 +858,14 @@ async def upload_audience(
     # Enrich each visitor with Claude (parallel, max 5 concurrent)
     enriched_rows = []
     if ANTHROPIC_API_KEY:
-        async with httpx.AsyncClient() as client:
-            sem = asyncio.Semaphore(5)
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            sem = asyncio.Semaphore(8)
             async def enrich_one(row):
                 async with sem:
-                    signals = await _enrich_visitor(row, event_ctx, client)
+                    try:
+                        signals = await _enrich_visitor(row, event_ctx, client)
+                    except Exception:
+                        signals = {}
                     return {**row, **signals}
             enriched_rows = await asyncio.gather(*[enrich_one(r) for r in rows])
     else:
