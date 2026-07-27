@@ -213,8 +213,29 @@ Rules:
         resp.raise_for_status()
         text = resp.json()["content"][0]["text"]
         # Strip markdown fences if present
-        text = text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        return json.loads(text)
+        import re as _re
+        text = text.strip()
+        text = _re.sub(r'^```json\s*', '', text)
+        text = _re.sub(r'^```\s*', '', text)
+        text = _re.sub(r'\s*```$', '', text).strip()
+        # Try direct parse first
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # Extract just the JSON object, truncating any bad tail
+            match = _re.search(r'\{.*\}', text, _re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(0))
+                except Exception:
+                    pass
+            # Last resort: extract numeric fields only
+            result = {}
+            for key in ["seniority_score","icp_fit_score","company_size_match","categories_specificity","buying_cycle_stage","trigger_event_score","tech_stack_compatibility","competitive_displacement","profile_completeness"]:
+                m = _re.search(rf'"{key}"\s*:\s*([0-9.]+)', text)
+                if m:
+                    result[key] = float(m.group(1))
+            return result if result else {}
     except Exception as e:
         logger.error("Enrichment failed for %s: %s", name, e)
         return {}
@@ -815,11 +836,22 @@ async def upload_audience(
     supabase = get_db()
 
     content = await file.read()
+    filename = (file.filename or "").lower()
     try:
-        reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
-        rows = list(reader)
-    except Exception:
-        raise HTTPException(400, "Could not parse CSV")
+        if filename.endswith(".xlsx") or filename.endswith(".xls"):
+            import openpyxl, io as _io
+            wb = openpyxl.load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
+            ws = wb.active
+            headers = [str(c.value or "").strip() for c in next(ws.iter_rows(min_row=1, max_row=1))]
+            rows = []
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                rows.append({headers[i]: (str(v).strip() if v is not None else "") for i, v in enumerate(row)})
+            wb.close()
+        else:
+            reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
+            rows = list(reader)
+    except Exception as e:
+        raise HTTPException(400, f"Could not parse file: {e}")
 
     if not rows:
         raise HTTPException(400, "Empty CSV")
@@ -847,11 +879,14 @@ async def upload_audience(
     # Enrich each visitor with Claude (parallel, max 5 concurrent)
     enriched_rows = []
     if ANTHROPIC_API_KEY:
-        async with httpx.AsyncClient() as client:
-            sem = asyncio.Semaphore(5)
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            sem = asyncio.Semaphore(8)
             async def enrich_one(row):
                 async with sem:
-                    signals = await _enrich_visitor(row, event_ctx, client)
+                    try:
+                        signals = await _enrich_visitor(row, event_ctx, client)
+                    except Exception:
+                        signals = {}
                     return {**row, **signals}
             enriched_rows = await asyncio.gather(*[enrich_one(r) for r in rows])
     else:
