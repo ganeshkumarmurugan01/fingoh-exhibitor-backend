@@ -837,6 +837,7 @@ async def upload_audience(
 
     content = await file.read()
     filename = (file.filename or "").lower()
+    logger.info("Upload attempt: filename=%s, content_type=%s, size=%d", filename, file.content_type, len(content))
     try:
         if filename.endswith(".xlsx") or filename.endswith(".xls"):
             import openpyxl, io as _io
