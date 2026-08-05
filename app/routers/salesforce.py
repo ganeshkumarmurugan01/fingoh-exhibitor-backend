@@ -27,8 +27,8 @@ SF_REDIRECT_URI  = os.getenv(
 )
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://fingoh-exhibitor.vercel.app")
 
-SF_AUTH_URL  = "https://login.salesforce.com/services/oauth2/authorize"
-SF_TOKEN_URL = "https://login.salesforce.com/services/oauth2/token"
+SF_AUTH_URL  = os.getenv("SALESFORCE_AUTH_URL",  "https://login.salesforce.com/services/oauth2/authorize")
+SF_TOKEN_URL = os.getenv("SALESFORCE_TOKEN_URL", "https://login.salesforce.com/services/oauth2/token")
 SF_SCOPES    = "api refresh_token offline_access"
 
 
