@@ -159,7 +159,8 @@ async def sf_auth_url(
         f"&state={state}"
         f"&prompt=consent"
     )
-    return {"url": url}
+    logger.info("SF auth URL client_id=%r len=%d", SF_CLIENT_ID, len(SF_CLIENT_ID or ""))
+    return {"url": url, "debug_client_id_len": len(SF_CLIENT_ID or "")}
 
 
 @router.get("/callback")
