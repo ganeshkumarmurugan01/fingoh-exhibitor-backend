@@ -11,6 +11,8 @@ from app.routers import onboarding, events, staff
 from app.routers import audience
 from app.routers import meetings
 from app.routers import crm
+from app.routers import salesforce
+from app.routers import salesforce
 from app.routers import admin
 from app.routers import agent
 from app.routers import email_config
@@ -46,6 +48,8 @@ app.include_router(staff.router, prefix=API_PREFIX)
 app.include_router(audience.router, prefix=API_PREFIX)
 app.include_router(meetings.router, prefix=API_PREFIX)
 app.include_router(crm.router, prefix=API_PREFIX)
+app.include_router(salesforce.router, prefix=API_PREFIX)
+app.include_router(salesforce.router, prefix=API_PREFIX)
 app.include_router(admin.router, prefix=API_PREFIX)
 app.include_router(agent.router, prefix=API_PREFIX)
 app.include_router(email_config.router, prefix=API_PREFIX)

@@ -93,7 +93,7 @@ async def list_customers(
         return []
 
     # Batch fetch all profiles and events in 2 queries
-    all_profiles = db.table("profiles").select("id,name,role,org_id").in_("org_id", org_ids).neq("role", "super_admin").execute()
+    all_profiles = db.table("profiles").select("id,name,role,org_id,email").in_("org_id", org_ids).neq("role", "super_admin").execute()
     all_events   = db.table("events").select("id,org_id").in_("org_id", org_ids).execute()
 
     # Group by org_id
