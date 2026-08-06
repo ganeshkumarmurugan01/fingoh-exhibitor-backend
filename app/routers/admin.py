@@ -216,6 +216,7 @@ async def create_customer(
         "id":     user_id,
         "org_id": org_id,
         "name":   payload.admin_name,
+        "email":  payload.admin_email,
         "role":   "admin",
         "title":  "Account Admin",
     }).execute()
@@ -451,6 +452,7 @@ async def add_user_to_org(
         "id":     user_id,
         "org_id": org_id,
         "name":   payload.name,
+        "email":  payload.email,
         "role":   payload.role,
         "title":  payload.title or "",
     }).execute()
