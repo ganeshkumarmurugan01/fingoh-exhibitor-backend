@@ -2,7 +2,7 @@ import re
 import secrets
 import string
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
 from app.auth import get_current_user
@@ -187,6 +187,7 @@ async def self_signup(payload: SelfSignupPayload):
         "status":  "active",
         "max_events": 1,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "subscription_expires_at": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
     }).execute()
 
     if not org_res.data:
@@ -224,11 +225,12 @@ async def self_signup(payload: SelfSignupPayload):
 
     # Create profile
     db.table("profiles").upsert({
-        "id":    user_id,
+        "id":     user_id,
         "org_id": org_id,
-        "name":  payload.name,
-        "role":  "admin",
-        "title": "Account Admin",
+        "name":   payload.name,
+        "email":  payload.email,
+        "role":   "admin",
+        "title":  "Account Admin",
     }).execute()
 
     # Send verification + welcome emails via Zoho using platform email config (best-effort)
