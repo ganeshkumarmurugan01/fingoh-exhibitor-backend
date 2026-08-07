@@ -1712,6 +1712,7 @@ async def delete_contact(
     db.table("agent_outputs").delete().eq("contact_id", contact_id).eq("event_id", event_id).execute()
     meeting_ids = [m["id"] for m in (db.table("meeting_requests").select("id").eq("contact_id", contact_id).eq("event_id", event_id).execute().data or [])]
     if meeting_ids:
+        db.table("meeting_tokens").delete().in_("meeting_id", meeting_ids).execute()
         db.table("meeting_requests").delete().in_("id", meeting_ids).execute()
     db.table("audience_contacts").delete().eq("id", contact_id).eq("event_id", event_id).execute()
 
