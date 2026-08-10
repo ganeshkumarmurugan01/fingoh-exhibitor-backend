@@ -39,6 +39,7 @@ class EventCreate(BaseModel):
     product: Optional[str] = None
     website: Optional[str] = None
     booth_size: Optional[str] = None
+    industry_vertical: Optional[str] = None
 
     # Step 3 — Target categories
     categories: List[str] = []
@@ -54,6 +55,9 @@ class EventCreate(BaseModel):
     intent_signals: List[dict] = []
     buyer_signals: List[dict] = []
 
+    # Industry vertical — auto-mapped from event type
+    industry_vertical: Optional[str] = "general"
+
 
 class EventUpdate(BaseModel):
     """Partial update — all fields optional."""
@@ -66,6 +70,7 @@ class EventUpdate(BaseModel):
     product: Optional[str] = None
     website: Optional[str] = None
     booth_size: Optional[str] = None
+    industry_vertical: Optional[str] = None
 
 
 class TargetingUpdate(BaseModel):

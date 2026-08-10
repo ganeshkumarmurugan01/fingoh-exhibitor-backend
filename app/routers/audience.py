@@ -11,6 +11,20 @@ logger = logging.getLogger("fingoh.audience")
 router = APIRouter(prefix="/audience", tags=["audience"])
 
 MODAL_SCORER_URL  = os.getenv("MODAL_SCORER_URL")
+
+# Industry-specific scorer URLs
+MODAL_SCORER_URLS = {
+    "pharma":      os.getenv("MODAL_SCORER_URL_PHARMA"),
+    "electronics": os.getenv("MODAL_SCORER_URL_ELECTRONICS"),
+    "logistics":   os.getenv("MODAL_SCORER_URL_LOGISTICS"),
+    "general":     os.getenv("MODAL_SCORER_URL"),
+}
+MODAL_MEETING_SCORER_URLS = {
+    "pharma":      os.getenv("MODAL_MEETING_SCORER_URL_PHARMA"),
+    "electronics": os.getenv("MODAL_MEETING_SCORER_URL_ELECTRONICS"),
+    "logistics":   os.getenv("MODAL_MEETING_SCORER_URL_LOGISTICS"),
+    "general":     os.getenv("MEETING_SCORER_URL"),
+}
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 
@@ -125,6 +139,26 @@ def _parse_meeting_interest(val):
     return None
 
 # ── Claude enrichment — extracts signals for one visitor ─────────────────────
+# ── Industry-specific enrichment context ─────────────────────────────────────
+INDUSTRY_CONTEXT = {
+    "pharma": """Industry: Pharmaceutical, Biotech, Pharma Manufacturing, API & Excipients, Medical Devices.
+Key buying signals: regulatory compliance needs, GMP/FDA/EMA certifications, API sourcing, contract manufacturing, R&D pipeline expansion, serialisation, packaging line upgrades, lab equipment procurement.
+High-intent roles: Head of Procurement, VP Manufacturing, Regulatory Affairs Director, R&D Director, Supply Chain Head, QA/QC Manager.
+Trigger events: new drug approval, facility expansion, audit findings, patent cliff, biosimilar launch.""",
+
+    "electronics": """Industry: Electronics Manufacturing, Semiconductors, VLSI, PCB, Deep Tech, IoT, Embedded Systems, Defence Electronics.
+Key buying signals: component sourcing, EMS partnerships, semiconductor supply chain, design-in opportunities, prototype evaluation, testing equipment, IP licensing.
+High-intent roles: VP Engineering, Hardware Design Lead, Procurement Manager, CTO, Supply Chain Director, R&D Head, Fab Manager.
+Trigger events: new product launch, chip shortage response, fab expansion, defence contract win, EV/IoT platform development.""",
+
+    "logistics": """Industry: Logistics, Warehousing, Supply Chain, Cold Chain, 3PL, Freight, Last-Mile Delivery, Customs & Trade.
+Key buying signals: WMS/TMS evaluation, automation & robotics, fleet expansion, cold chain infrastructure, customs digitisation, last-mile optimisation.
+High-intent roles: VP Logistics, Supply Chain Director, Warehouse Manager, Chief Supply Chain Officer, Fleet Manager, Operations Head.
+Trigger events: new distribution centre, e-commerce growth, regulatory change, contract renewal, ESG sustainability initiative.""",
+
+    "general": "",
+}
+
 async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncClient) -> dict:
     if not ANTHROPIC_API_KEY:
         return {}
@@ -151,7 +185,11 @@ async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncCli
     ex_intent    = event_ctx.get("intent_why") or ""
     ex_buyers    = event_ctx.get("intent_buyers") or ""
 
-    prompt = f"""You are an AI analyst for a B2B trade fair intelligence platform.
+    industry_vertical = event_ctx.get("industry_vertical") or "general"
+    industry_hint = INDUSTRY_CONTEXT.get(industry_vertical, "")
+
+    prompt = f"""You are an AI analyst for a B2B trade fair intelligence platform specialised in {industry_vertical.upper()} industry intelligence.
+{f"INDUSTRY CONTEXT: {industry_hint}" if industry_hint else ""}
 
 EXHIBITOR CONTEXT:
 - Company: {ex_company}
@@ -242,11 +280,13 @@ Rules:
 
 
 # ── Score batch via Modal XGBoost ─────────────────────────────────────────────
-async def _score_batch(rows: list[dict]) -> list[dict]:
-    if not MODAL_SCORER_URL:
+async def _score_batch(rows: list[dict], industry_vertical: str = "general") -> list[dict]:
+    url = MODAL_SCORER_URLS.get(industry_vertical) or MODAL_SCORER_URL
+    if not url:
         return [{"ieiScore": 50.0, "regProb": 0.5} for _ in rows]
+    logger.info("Scoring %d visitors via %s scorer", len(rows), industry_vertical)
     async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(MODAL_SCORER_URL, json={"visitors": rows})
+        resp = await client.post(url, json={"visitors": rows})
         resp.raise_for_status()
         return resp.json()["scores"]
 
@@ -422,7 +462,7 @@ async def rescore_all(
         try:
             modal_rows = [{k: v for k, v in r.items() if k != "_contact"} for r in rows]
             for i in range(0, len(modal_rows), BATCH):
-                batch_scores = await _score_batch(modal_rows[i:i+BATCH])
+                batch_scores = await _score_batch(modal_rows[i:i+BATCH], event_ctx.get("industry_vertical","general"))
                 scores.extend(batch_scores)
         except Exception as e:
             logger.warning("Modal scorer failed during rescore_all, falling back: %s", e)
@@ -693,7 +733,7 @@ async def register_visitor(event_id: str, payload: RegistrationPayload):
         "previous_event_history":   safe(merged_signals.get("previous_event_history"), 0.0),
     }
 
-    scores = await _score_batch([score_row])
+    scores = await _score_batch([score_row], event_ctx.get("industry_vertical", "general"))
     new_iei = float(full.get("iei_score") or 43)
     new_reg = float(full.get("reg_prob") or 0.43)
     if scores:
@@ -764,7 +804,7 @@ async def rescore_one(event_id: str, email: str):
         "categories_specificity":   safe(raw.get("categories_specificity"), 0.0),
         "profile_completeness":     safe(raw.get("profile_completeness"), 0.5),
     }
-    scores = await _score_batch([row])
+    scores = await _score_batch([row], event_ctx.get("industry_vertical", "general"))
     if scores:
         iei  = round(float(scores[0].get("ieiScore", 43)), 2)
         reg  = round(float(scores[0].get("regProb", 0.43)), 4)
@@ -899,7 +939,7 @@ async def upload_audience(
         enriched_rows = rows
 
     # Score with XGBoost via Modal
-    scored = await _score_batch(enriched_rows)
+    scored = await _score_batch(enriched_rows, event_ctx.get("industry_vertical", "general"))
 
     # ── Apply historical boost from previous edition ───────────────────────
     # Fetch previous_event_id for this event

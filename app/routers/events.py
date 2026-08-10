@@ -142,6 +142,7 @@ def create_event(
         "product": payload.product,
         "website": payload.website,
         "booth_size": payload.booth_size,
+        "industry_vertical": payload.industry_vertical or "general",
         "iei_credits": initial_credits,
     }
     event_result = db.table("events").insert(event_row).execute()
