@@ -339,6 +339,10 @@ async def get_meeting_prospects(
     if not contacts:
         return []
 
+    # Get event details for industry vertical routing
+    event_res = db.table("events").select("name, company, industry_vertical").eq("id", event_id).maybe_single().execute()
+    event = event_res.data if event_res and event_res.data else {}
+
     # Get existing meeting requests to mark already-requested contacts
     meetings_res = db.table("meeting_requests").select(
         "id, contact_id, status, proposed_datetime, completed_at, actual_start_time, actual_end_time, duration_minutes, location, topic, staff_completion_notes, ai_analysis"
