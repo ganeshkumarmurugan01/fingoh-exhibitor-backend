@@ -469,7 +469,7 @@ async def rescore_all(
                 float(row.get("trigger_event_score") or 0.0)) * 0.15
         )
         iei = round(min(100.0, max(0.0, raw * 100)), 1)
-       industry = row.get("industry_vertical", "general")
+        industry = row.get("industry_vertical", "general")
         if industry == "pharma":
             tier = "T1" if iei >= 62 else "T2" if iei >= 44 else "T3" if iei >= 34 else "T4"
         else:
