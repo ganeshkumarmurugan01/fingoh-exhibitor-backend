@@ -203,6 +203,17 @@ async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncCli
     ex_intent    = event_ctx.get("intent_why") or ""
     ex_buyers    = event_ctx.get("intent_buyers") or ""
 
+    # Pharma-specific visitor fields from upload template
+    company_type        = visitor.get("company_type") or ""
+    regulatory_market   = visitor.get("regulatory_market") or ""
+    specific_product    = visitor.get("specific_product_interest") or ""
+    visit_timeline      = visitor.get("visit_timeline") or ""
+    incumbent_vendor    = visitor.get("incumbent_vendor") or ""
+    previous_edition    = visitor.get("previous_edition") or ""
+    export_markets      = visitor.get("export_markets") or ""
+    annual_procurement  = visitor.get("annual_procurement_value") or ""
+    linkedin_url        = visitor.get("linkedin_url") or ""
+
     industry_vertical = event_ctx.get("industry_vertical") or "general"
     industry_hint = INDUSTRY_CONTEXT.get(industry_vertical, "")
     pharma_json_fields = """,
@@ -233,7 +244,16 @@ VISITOR TO ANALYSE:
 - Company: {company}
 - Country: {country}
 - Declared visit reason: {reason}
-- Categories of interest: {categories}
+- Categories of interest: {categories}{f"""
+- Company type: {company_type}""" if company_type else ""}{f"""
+- Regulatory markets: {regulatory_market}""" if regulatory_market else ""}{f"""
+- Specific product interest: {specific_product}""" if specific_product else ""}{f"""
+- Purchase timeline: {visit_timeline}""" if visit_timeline else ""}{f"""
+- Export markets: {export_markets}""" if export_markets else ""}{f"""
+- Incumbent vendor: {incumbent_vendor}""" if incumbent_vendor else ""}{f"""
+- Previous edition attendee: {previous_edition}""" if previous_edition else ""}{f"""
+- Annual procurement value: {annual_procurement}""" if annual_procurement else ""}{f"""
+- LinkedIn: {linkedin_url}""" if linkedin_url else ""}
 
 Using your knowledge of this person's role, company, and industry context, estimate the following intent signals as decimal values between 0.0 and 1.0.
 
