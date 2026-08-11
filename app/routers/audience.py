@@ -469,7 +469,11 @@ async def rescore_all(
                 float(row.get("trigger_event_score") or 0.0)) * 0.15
         )
         iei = round(min(100.0, max(0.0, raw * 100)), 1)
-        tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
+       industry = row.get("industry_vertical", "general")
+        if industry == "pharma":
+            tier = "T1" if iei >= 62 else "T2" if iei >= 44 else "T3" if iei >= 34 else "T4"
+        else:
+            tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
         return iei, tier
 
     # Build rows with freshly computed icp_fit_score
@@ -534,7 +538,11 @@ async def rescore_all(
         else:
             iei, _ = _rule_based_iei(icp_fit, row)
 
-        tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
+        industry_vertical = event_ctx.get("industry_vertical", "general")
+        if industry_vertical == "pharma":
+            tier = "T1" if iei >= 62 else "T2" if iei >= 44 else "T3" if iei >= 34 else "T4"
+        else:
+            tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
         db.table("audience_contacts").update({
             "icp_fit_score": icp_fit,
             "iei_score":     iei,
