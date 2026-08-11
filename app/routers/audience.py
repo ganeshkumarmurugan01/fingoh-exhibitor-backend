@@ -205,6 +205,13 @@ async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncCli
 
     industry_vertical = event_ctx.get("industry_vertical") or "general"
     industry_hint = INDUSTRY_CONTEXT.get(industry_vertical, "")
+    pharma_json_fields = """,
+  "country_regulatory_score": 0.0,
+  "procurement_mandate_score": 0.0,
+  "regulatory_compliance_focus": 0.0,
+  "company_type_match": 0.0,
+  "sourcing_specificity_score": 0.0,
+  "repeat_buyer_potential": 0.0""" if industry_vertical == "pharma" else ""
 
     prompt = f"""You are an AI analyst for a B2B trade fair intelligence platform specialised in {industry_vertical.upper()} industry intelligence.
 {f"INDUSTRY CONTEXT: {industry_hint}" if industry_hint else ""}
@@ -241,8 +248,7 @@ Respond ONLY with a valid JSON object — no explanation, no markdown:
   "tech_stack_compatibility": 0.0,
   "competitive_displacement": 0.0,
   "profile_completeness": 0.0,
-  "enrichment_notes": "brief reason for scores"{"," if industry_vertical == "pharma" else ""}
-{'  "country_regulatory_score": 0.0,\n  "procurement_mandate_score": 0.0,\n  "regulatory_compliance_focus": 0.0,\n  "company_type_match": 0.0,\n  "sourcing_specificity_score": 0.0,\n  "repeat_buyer_potential": 0.0' if industry_vertical == "pharma" else ""}
+  "enrichment_notes": "brief reason for scores"{pharma_json_fields}
 }}
 
 Rules:
