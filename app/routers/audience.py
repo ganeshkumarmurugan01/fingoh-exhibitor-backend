@@ -957,6 +957,26 @@ async def upload_audience(
     if not rows:
         raise HTTPException(400, "Empty CSV")
 
+    # Validate mandatory fields — reject rows missing name and company
+    valid_rows = []
+    rejected_rows = []
+    for row in rows:
+        name = _get(row, "name") or f'{_get(row, "first_name") or ""} {_get(row, "last_name") or ""}'.strip()
+        company = _get(row, "company")
+        email = _get(row, "email")
+        missing = []
+        if not name:
+            missing.append("name")
+        if not company:
+            missing.append("company")
+        if not email:
+            missing.append("email")
+        if missing:
+            rejected_rows.append({"row": row, "missing": missing})
+        else:
+            valid_rows.append(row)
+    rows = valid_rows
+
     # ── Enforce contact cap for this org's plan ──────────────────────────────
     from app.auth import get_user_org
     org_id = get_user_org(current_user["user_id"], supabase)
@@ -1037,10 +1057,12 @@ async def upload_audience(
     log_activity(get_db(), get_user_org(current_user["user_id"], get_db()), "contacts_uploaded", f"Uploaded {len(records)} contacts", current_user["user_id"], {"count": len(records), "event_id": event_id})
     return {
         "uploaded":    len(records),
+        "rejected":    len(rejected_rows),
+        "rejected_details": [{"missing": r["missing"]} for r in rejected_rows[:10]],
         "event_id":    event_id,
         "plan_limit":  max_contacts,
         "used_after":  existing_count + len(records),
-        "truncated":   len(rows) < (existing_count + len(records)),  # True if we cut rows
+        "truncated":   len(rows) < (existing_count + len(records)),
     }
 
 
