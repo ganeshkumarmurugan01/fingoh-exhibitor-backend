@@ -469,7 +469,11 @@ async def rescore_all(
                 float(row.get("trigger_event_score") or 0.0)) * 0.15
         )
         iei = round(min(100.0, max(0.0, raw * 100)), 1)
-        tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
+        industry = row.get("industry_vertical", "general")
+        if industry == "pharma":
+            tier = "T1" if iei >= 62 else "T2" if iei >= 44 else "T3" if iei >= 34 else "T4"
+        else:
+            tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
         return iei, tier
 
     # Build rows with freshly computed icp_fit_score
@@ -505,12 +509,19 @@ async def rescore_all(
             "tech_stack_compatibility": _f("tech_stack_compatibility"),
             "previous_event_history":   _f("previous_event_history"),
             "profile_completeness":     _f("profile_completeness", 0.5),
-            "categories_specificity":   _f("categories_specificity"),
+             "categories_specificity":   _f("categories_specificity"),
+            # Pharma signal derivation fields — passed from raw_data/contact
+            "primary_reason":           c.get("primary_reason") or rd.get("primary_reason") or "",
+            "country":                  c.get("country") or rd.get("country") or "",
+            "categories_interest":      c.get("categories_interest") or rd.get("categories_interest") or "",
+            "job_title":                c.get("designation") or rd.get("job_title") or "",
             "_contact":                 c,
         })
 
     # Try XGBoost via Modal; fall back to rule-based if unavailable
-    use_modal = bool(MODAL_SCORER_URL)
+    industry_vertical = event_ctx.get("industry_vertical", "general")
+    effective_scorer_url = MODAL_SCORER_URLS.get(industry_vertical) or MODAL_SCORER_URL
+    use_modal = bool(effective_scorer_url)
     BATCH = 20
     scores = []
     if use_modal:
@@ -534,10 +545,15 @@ async def rescore_all(
         else:
             iei, _ = _rule_based_iei(icp_fit, row)
 
-        tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
+        industry_vertical = event_ctx.get("industry_vertical", "general")
+        if industry_vertical == "pharma":
+            tier = "T1" if iei >= 62 else "T2" if iei >= 44 else "T3" if iei >= 34 else "T4"
+        else:
+            tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
         db.table("audience_contacts").update({
             "icp_fit_score": icp_fit,
             "iei_score":     iei,
+            "iei_tier":      tier,
         }).eq("id", c["id"]).execute()
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
         updated += 1
