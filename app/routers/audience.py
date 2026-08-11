@@ -509,12 +509,19 @@ async def rescore_all(
             "tech_stack_compatibility": _f("tech_stack_compatibility"),
             "previous_event_history":   _f("previous_event_history"),
             "profile_completeness":     _f("profile_completeness", 0.5),
-            "categories_specificity":   _f("categories_specificity"),
+             "categories_specificity":   _f("categories_specificity"),
+            # Pharma signal derivation fields — passed from raw_data/contact
+            "primary_reason":           c.get("primary_reason") or rd.get("primary_reason") or "",
+            "country":                  c.get("country") or rd.get("country") or "",
+            "categories_interest":      c.get("categories_interest") or rd.get("categories_interest") or "",
+            "job_title":                c.get("designation") or rd.get("job_title") or "",
             "_contact":                 c,
         })
 
     # Try XGBoost via Modal; fall back to rule-based if unavailable
-    use_modal = bool(MODAL_SCORER_URL)
+    industry_vertical = event_ctx.get("industry_vertical", "general")
+    effective_scorer_url = MODAL_SCORER_URLS.get(industry_vertical) or MODAL_SCORER_URL
+    use_modal = bool(effective_scorer_url)
     BATCH = 20
     scores = []
     if use_modal:
