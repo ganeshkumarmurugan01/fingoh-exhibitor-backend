@@ -267,7 +267,6 @@ PHARMA-SPECIFIC SIGNALS (output these additional fields for pharma events):
 - repeat_buyer_potential: based on company profile and country, likelihood this represents a recurring/repeat procurement relationship. Large established pharma companies from mature markets = higher. 1.0 = very likely repeat buyer, 0.3 = one-time or unclear."""}"""
 
     try:
-        logger.info("PHARMA PROMPT FIELDS: vertical=%s pharma_fields=%r", industry_vertical, pharma_json_fields[:50] if pharma_json_fields else "EMPTY")
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={
