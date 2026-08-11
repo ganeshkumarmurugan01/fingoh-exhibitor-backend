@@ -102,6 +102,7 @@ class EventResponse(BaseModel):
     product: Optional[str]
     website: Optional[str]
     booth_size: Optional[str]
+    industry_vertical: Optional[str] = "general"
     status: str
     created_by: Optional[str]
     created_at: str
