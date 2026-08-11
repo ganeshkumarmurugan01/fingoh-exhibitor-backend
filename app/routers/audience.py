@@ -141,10 +141,28 @@ def _parse_meeting_interest(val):
 # ── Claude enrichment — extracts signals for one visitor ─────────────────────
 # ── Industry-specific enrichment context ─────────────────────────────────────
 INDUSTRY_CONTEXT = {
-    "pharma": """Industry: Pharmaceutical, Biotech, Pharma Manufacturing, API & Excipients, Medical Devices.
-Key buying signals: regulatory compliance needs, GMP/FDA/EMA certifications, API sourcing, contract manufacturing, R&D pipeline expansion, serialisation, packaging line upgrades, lab equipment procurement.
-High-intent roles: Head of Procurement, VP Manufacturing, Regulatory Affairs Director, R&D Director, Supply Chain Head, QA/QC Manager.
-Trigger events: new drug approval, facility expansion, audit findings, patent cliff, biosimilar launch.""",
+    "pharma": """Industry: Pharmaceutical, Biotech, Pharma Manufacturing, API & Excipients, Medical Devices, Pharma Packaging.
+Key buying signals: regulatory compliance needs, GMP/FDA/EMA/WHO PQ certifications, API sourcing, contract manufacturing, R&D pipeline expansion, serialisation, packaging line upgrades, lab equipment procurement, quality systems, cold chain validation.
+High-intent roles: Head of Procurement, VP Manufacturing, Regulatory Affairs Director, R&D Director, Supply Chain Head, QA/QC Manager, Plant Head, Technical Director.
+Trigger events: new drug approval, facility expansion, USFDA audit findings, patent cliff, biosimilar launch, capacity expansion, new market entry.
+
+COUNTRY REGULATORY INTELLIGENCE (critical for pharma scoring):
+- India: Major generic drug and API manufacturer. Companies export to US/EU/WHO markets. High procurement intent for GMP-compliant materials. Known for price sensitivity but volume buyers. Cross-border preference: buy from EU/US/Japan for compliance, local for cost.
+- USA: FDA 21 CFR compliance non-negotiable. Buyers highly specific in requirements. Long qualification cycles but high-value contracts. Preference: domestic or EU-GMP suppliers.
+- Germany/EU: EMA compliance, strict GMP. Process-oriented buyers with long evaluation cycles. Strong preference for EU-certified suppliers. Reluctant to buy from non-EU unless WHO PQ certified.
+- China: NMPA regulations, large domestic market, API exporter. Growing compliance maturity. Some geopolitical sourcing restrictions from Western buyers.
+- Japan: PMDA regulations, extremely high quality standards, very long evaluation cycles. Preference for domestic or established Western suppliers.
+- Middle East (UAE, Saudi, Egypt): Gulf Pharma Council, SFDA, EDA regulations. Growing local manufacturing. Often buy from India/EU. Strong relationship-driven procurement.
+- Southeast Asia (Thailand, Vietnam, Indonesia, Malaysia): WHO PQ focus, growing generics. Often buy from India/China. Increasing compliance requirements.
+- Brazil: ANVISA regulations, large market, complex import regulations. Prefer suppliers with ANVISA registration or equivalence.
+- Africa: WHO PQ is key. Donors (PEPFAR, Global Fund) often specify suppliers. Price-sensitive but volume buyers.
+
+CROSS-BORDER BUYING PATTERNS:
+- Indian pharma companies buying EU/US-compliant packaging = very high intent (export mandate)
+- EU buyers evaluating Indian API suppliers = high intent but long qualification
+- Middle Eastern buyers sourcing from India = high volume intent
+- Japanese buyers rarely buy from China = geopolitical preference signal
+- US buyers requiring FDA-registered foreign suppliers = very specific intent""",
 
     "electronics": """Industry: Electronics Manufacturing, Semiconductors, VLSI, PCB, Deep Tech, IoT, Embedded Systems, Defence Electronics.
 Key buying signals: component sourcing, EMS partnerships, semiconductor supply chain, design-in opportunities, prototype evaluation, testing equipment, IP licensing.
@@ -223,7 +241,8 @@ Respond ONLY with a valid JSON object — no explanation, no markdown:
   "tech_stack_compatibility": 0.0,
   "competitive_displacement": 0.0,
   "profile_completeness": 0.0,
-  "enrichment_notes": "brief reason for scores"
+  "enrichment_notes": "brief reason for scores"{"," if industry_vertical == "pharma" else ""}
+{'  "country_regulatory_score": 0.0,\n  "procurement_mandate_score": 0.0,\n  "regulatory_compliance_focus": 0.0,\n  "company_type_match": 0.0,\n  "sourcing_specificity_score": 0.0,\n  "repeat_buyer_potential": 0.0' if industry_vertical == "pharma" else ""}
 }}
 
 Rules:
@@ -231,7 +250,15 @@ Rules:
 - seniority_score: buying authority (1.0 = CEO/CXO, 0.75 = Director/VP, 0.5 = Manager, 0.3 = Analyst)
 - buying_cycle_stage: evidence of active evaluation (1.0 = active RFP/procurement, 0.5 = researching, 0.1 = awareness)
 - trigger_event_score: recent company signals like funding, expansion, new hire (0-1)
-- Be honest — if you have no data, use 0.3 as neutral, not 0.0"""
+- Be honest — if you have no data, use 0.3 as neutral, not 0.0{"" if industry_vertical != "pharma" else """
+
+PHARMA-SPECIFIC SIGNALS (output these additional fields for pharma events):
+- country_regulatory_score: assess the visitor's country pharma regulatory environment and how it aligns with the exhibitor's products/certifications. Consider: (1) regulatory framework maturity of visitor's country, (2) cross-border buying patterns between visitor's country and exhibitor's country, (3) known sourcing preferences or restrictions of that country's pharma industry, (4) whether visitor's country exports to markets that require exhibitor's compliance standards. Score 0-1 where 1.0 = perfect regulatory/trade alignment.
+- procurement_mandate_score: likelihood of active procurement mandate vs passive evaluation. Consider declared reason, role, company type, company size. 1.0 = active RFP/tender, 0.7 = shortlisting vendors, 0.4 = evaluating options, 0.1 = awareness/browsing.
+- regulatory_compliance_focus: specificity of regulatory compliance interest. 1.0 = declared specific standard (GMP/FDA/WHO PQ), 0.6 = general compliance interest, 0.3 = no compliance signal.
+- company_type_match: how well visitor's company type matches exhibitor's ideal customer. Consider: pharma manufacturer, API producer, CMO/CDMO, packaging company, distributor, hospital/institution. Score based on fit with exhibitor's product.
+- sourcing_specificity_score: how specific is the declared or inferred sourcing need. 1.0 = very specific product/material declared, 0.6 = category declared, 0.3 = general interest, 0.1 = no specificity.
+- repeat_buyer_potential: based on company profile and country, likelihood this represents a recurring/repeat procurement relationship. Large established pharma companies from mature markets = higher. 1.0 = very likely repeat buyer, 0.3 = one-time or unclear."""}"""
 
     try:
         resp = await client.post(
@@ -269,7 +296,9 @@ Rules:
                     pass
             # Last resort: extract numeric fields only
             result = {}
-            for key in ["seniority_score","icp_fit_score","company_size_match","categories_specificity","buying_cycle_stage","trigger_event_score","tech_stack_compatibility","competitive_displacement","profile_completeness"]:
+            base_keys = ["seniority_score","icp_fit_score","company_size_match","categories_specificity","buying_cycle_stage","trigger_event_score","tech_stack_compatibility","competitive_displacement","profile_completeness"]
+            pharma_keys = ["country_regulatory_score","procurement_mandate_score","regulatory_compliance_focus","company_type_match","sourcing_specificity_score","repeat_buyer_potential"] if industry_vertical == "pharma" else []
+            for key in base_keys + pharma_keys:
                 m = _re.search(rf'"{key}"\s*:\s*([0-9.]+)', text)
                 if m:
                     result[key] = float(m.group(1))
