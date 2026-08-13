@@ -667,10 +667,18 @@ async def upload_visitor_data(
 
     # read CSV
     content = await file.read()
+    decoded = None
+    for encoding in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
+        try:
+            decoded = content.decode(encoding)
+            break
+        except Exception:
+            continue
+    if decoded is None:
+        raise HTTPException(status_code=400, detail="Could not decode CSV file. Please save as UTF-8.")
     try:
-        decoded = content.decode("utf-8-sig")
-        reader  = csv.DictReader(io.StringIO(decoded))
-        rows    = [row for row in reader]
+        reader = csv.DictReader(io.StringIO(decoded))
+        rows   = [row for row in reader]
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid CSV: {str(e)}")
 
