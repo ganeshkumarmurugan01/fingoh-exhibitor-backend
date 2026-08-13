@@ -406,7 +406,7 @@ async def send_organiser_invite_email(
     print(f"[invite email] starting Zoho send to {invite_email}")
     try:
         from app.routers.meetings import get_zoho_access_token
-        ZOHO_ACCOUNT_ID = os.getenv("ZOHO_ACCOUNT_ID", "5733662000000008002")
+        ZOHO_ACCOUNT_ID = os.getenv("ZOHO_ACCOUNT_ID") or "670863000000008002"
         ZOHO_FROM_EMAIL = os.getenv("ZOHO_FROM_EMAIL", "hello@fingoh.ai")
 
         access_token = await get_zoho_access_token()
