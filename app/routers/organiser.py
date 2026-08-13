@@ -1081,3 +1081,177 @@ def delete_visitor_row(
         ).eq("id", organiser_id).execute()
 
     return {"message": "Row deleted"}
+
+
+# ── Exhibitor-side: browse and import organiser visitor pool ──────────────────
+@router.get("/organiser/pool/{organiser_event_id}")
+def get_organiser_pool(
+    organiser_event_id: str,
+    page: int = 1,
+    page_size: int = 50,
+    x_fingoh_auth: Optional[str] = Header(None),
+):
+    """Called by exhibitor app to browse available visitor rows."""
+    from app.routers.onboarding import get_current_user
+    if not x_fingoh_auth:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        user = get_current_user(x_fingoh_auth)
+        org_id = user.get("org_id")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    sb = get_supabase()
+
+    # verify exhibitor is linked to this event
+    link = sb.table("organiser_exhibitor_links").select(
+        "id, data_allocation, data_consumed, status"
+    ).eq("organiser_event_id", organiser_event_id).eq(
+        "exhibitor_id", org_id
+    ).maybe_single().execute()
+
+    if not link or not link.data:
+        raise HTTPException(status_code=403, detail="Not linked to this organiser event")
+
+    if link.data["status"] == "removed":
+        raise HTTPException(status_code=403, detail="Your access has been revoked")
+
+    allocation  = link.data["data_allocation"]
+    consumed    = link.data["data_consumed"]
+    remaining   = max(0, allocation - consumed)
+
+    offset = (page - 1) * page_size
+    rows = sb.table("organiser_visitor_rows").select(
+        "id, raw_data, created_at"
+    ).eq("organiser_event_id", organiser_event_id).order(
+        "created_at", desc=False
+    ).range(offset, offset + page_size - 1).execute()
+
+    count_result = sb.table("organiser_visitor_rows").select(
+        "id", count="exact"
+    ).eq("organiser_event_id", organiser_event_id).execute()
+
+    return {
+        "rows":        rows.data or [],
+        "total":       count_result.count or 0,
+        "page":        page,
+        "page_size":   page_size,
+        "allocation":  allocation,
+        "consumed":    consumed,
+        "remaining":   remaining,
+        "link_id":     link.data["id"],
+    }
+
+
+@router.post("/organiser/import/{organiser_event_id}")
+def import_organiser_rows(
+    organiser_event_id: str,
+    body: dict,
+    x_fingoh_auth: Optional[str] = Header(None),
+):
+    """
+    Import selected visitor rows from organiser pool into exhibitor's audience.
+    body: { "row_ids": [...], "event_id": "exhibitor_event_id" }
+    """
+    from app.routers.onboarding import get_current_user
+    if not x_fingoh_auth:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        user = get_current_user(x_fingoh_auth)
+        org_id = user.get("org_id")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    sb = get_supabase()
+
+    row_ids      = body.get("row_ids", [])
+    event_id     = body.get("event_id")
+
+    if not row_ids:
+        raise HTTPException(status_code=400, detail="No rows selected")
+    if not event_id:
+        raise HTTPException(status_code=400, detail="event_id required")
+
+    # verify link
+    link = sb.table("organiser_exhibitor_links").select(
+        "id, data_allocation, data_consumed, status"
+    ).eq("organiser_event_id", organiser_event_id).eq(
+        "exhibitor_id", org_id
+    ).maybe_single().execute()
+
+    if not link or not link.data:
+        raise HTTPException(status_code=403, detail="Not linked to this organiser event")
+
+    allocation = link.data["data_allocation"]
+    consumed   = link.data["data_consumed"]
+    remaining  = allocation - consumed
+
+    if len(row_ids) > remaining:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Selection ({len(row_ids)}) exceeds remaining allocation ({remaining})"
+        )
+
+    # fetch selected rows
+    rows = sb.table("organiser_visitor_rows").select(
+        "id, raw_data"
+    ).in_("id", row_ids).execute()
+
+    if not rows or not rows.data:
+        raise HTTPException(status_code=404, detail="No rows found")
+
+    # insert into audience_contacts
+    imported = 0
+    for row in rows.data:
+        d = row["raw_data"] or {}
+        contact = {
+            "id":          str(uuid.uuid4()),
+            "org_id":      org_id,
+            "event_id":    event_id,
+            "first_name":  d.get("first_name", ""),
+            "last_name":   d.get("last_name", ""),
+            "email":       d.get("email", ""),
+            "company":     d.get("company", ""),
+            "job_title":   d.get("job_title", ""),
+            "country":     d.get("country", ""),
+            "city":        d.get("city", ""),
+            "phone":       d.get("phone", ""),
+            "linkedin_url":d.get("linkedin_url", ""),
+            "categories_interest": d.get("categories_interest", ""),
+            "primary_reason":      d.get("primary_reason", ""),
+            "company_size":        d.get("company_size", ""),
+            "incumbent_vendor":    d.get("incumbent_vendor", ""),
+            "source":      "organiser_import",
+        }
+        try:
+            sb.table("audience_contacts").insert(contact).execute()
+            imported += 1
+        except Exception:
+            pass  # skip duplicates
+
+    # update consumed count
+    sb.table("organiser_exhibitor_links").update(
+        {"data_consumed": consumed + imported, "status": "active"}
+    ).eq("id", link.data["id"]).execute()
+
+    # log import
+    sb.table("organiser_import_log").insert({
+        "id":                 str(uuid.uuid4()),
+        "organiser_event_id": organiser_event_id,
+        "exhibitor_id":       org_id,
+        "link_id":            link.data["id"],
+        "rows_imported":      imported,
+    }).execute()
+
+    # update organiser data_used
+    org_result = sb.table("organisers").select(
+        "id, data_used"
+    ).eq("id", sb.table("organiser_events").select(
+        "organiser_id"
+    ).eq("id", organiser_event_id).maybe_single().execute().data["organiser_id"]).maybe_single().execute()
+
+    return {
+        "message":  f"Successfully imported {imported} visitors",
+        "imported": imported,
+        "remaining": remaining - imported,
+    }
