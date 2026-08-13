@@ -541,7 +541,7 @@ async def invite_exhibitor(
     await send_organiser_invite_email(
         invite_email=body.invite_email.lower().strip(),
         organiser_name=org.data["name"],
-        event_name=event["data"]["name"],
+        event_name=event.data["name"],
         invite_token=invite_token,
         is_existing=is_existing,
     )
