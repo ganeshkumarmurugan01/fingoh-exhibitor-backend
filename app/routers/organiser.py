@@ -904,3 +904,180 @@ def accept_invite(token: str, x_fingoh_auth: Optional[str] = Header(None)):
         "organiser_name": organiser_name,
         "event_name":     event.data["name"] if event and event.data else "",
     }
+
+# ── Visitor Rows CRUD ─────────────────────────────────────────────────────────
+class VisitorRowData(BaseModel):
+    first_name: Optional[str] = ""
+    last_name: Optional[str] = ""
+    email: Optional[str] = ""
+    company: Optional[str] = ""
+    job_title: Optional[str] = ""
+    country: Optional[str] = ""
+    city: Optional[str] = ""
+    phone: Optional[str] = ""
+    linkedin_url: Optional[str] = ""
+    categories_interest: Optional[str] = ""
+    primary_reason: Optional[str] = ""
+    company_size: Optional[str] = ""
+    incumbent_vendor: Optional[str] = ""
+
+
+@router.get("/organiser/events/{event_id}/visitor-rows")
+def list_visitor_rows(
+    event_id: str,
+    page: int = 1,
+    page_size: int = 50,
+    current_user: dict = Depends(get_current_organiser_user),
+):
+    sb = get_supabase()
+    organiser_id = current_user["organiser_id"]
+
+    # verify ownership
+    event = sb.table("organiser_events").select("id").eq(
+        "id", event_id
+    ).eq("organiser_id", organiser_id).maybe_single().execute()
+    if not event or not event.data:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    offset = (page - 1) * page_size
+    rows = sb.table("organiser_visitor_rows").select(
+        "id, raw_data, created_at"
+    ).eq("organiser_event_id", event_id).order(
+        "created_at", desc=False
+    ).range(offset, offset + page_size - 1).execute()
+
+    # get total count
+    count_result = sb.table("organiser_visitor_rows").select(
+        "id", count="exact"
+    ).eq("organiser_event_id", event_id).execute()
+
+    return {
+        "rows":       rows.data or [],
+        "total":      count_result.count or 0,
+        "page":       page,
+        "page_size":  page_size,
+    }
+
+
+@router.post("/organiser/events/{event_id}/visitor-rows")
+def add_visitor_row(
+    event_id: str,
+    body: VisitorRowData,
+    current_user: dict = Depends(get_current_organiser_user),
+):
+    sb = get_supabase()
+    organiser_id = current_user["organiser_id"]
+
+    # verify ownership
+    event = sb.table("organiser_events").select("id").eq(
+        "id", event_id
+    ).eq("organiser_id", organiser_id).maybe_single().execute()
+    if not event or not event.data:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    # check quota
+    org = sb.table("organisers").select(
+        "data_quota, data_used"
+    ).eq("id", organiser_id).maybe_single().execute()
+    if org and org.data and org.data["data_used"] >= org.data["data_quota"]:
+        raise HTTPException(status_code=400, detail="Data quota reached")
+
+    # find or create a manual upload record
+    manual_upload = sb.table("organiser_visitor_uploads").select("id").eq(
+        "organiser_event_id", event_id
+    ).eq("filename", "__manual__").maybe_single().execute()
+
+    if not manual_upload or not manual_upload.data:
+        upload_result = sb.table("organiser_visitor_uploads").insert({
+            "id":                 str(uuid.uuid4()),
+            "organiser_id":       organiser_id,
+            "organiser_event_id": event_id,
+            "filename":           "__manual__",
+            "row_count":          0,
+        }).execute()
+        upload_id = upload_result.data[0]["id"]
+    else:
+        upload_id = manual_upload.data["id"]
+
+    # insert row
+    row_id = str(uuid.uuid4())
+    sb.table("organiser_visitor_rows").insert({
+        "id":                 row_id,
+        "upload_id":          upload_id,
+        "organiser_event_id": event_id,
+        "raw_data":           body.dict(),
+    }).execute()
+
+    # increment data_used and upload row_count
+    if org and org.data:
+        sb.table("organisers").update(
+            {"data_used": org.data["data_used"] + 1}
+        ).eq("id", organiser_id).execute()
+    sb.table("organiser_visitor_uploads").update(
+        {"row_count": sb.table("organiser_visitor_rows").select("id", count="exact").eq("upload_id", upload_id).execute().count}
+    ).eq("id", upload_id).execute()
+
+    return {"id": row_id, "message": "Row added"}
+
+
+@router.patch("/organiser/visitor-rows/{row_id}")
+def update_visitor_row(
+    row_id: str,
+    body: VisitorRowData,
+    current_user: dict = Depends(get_current_organiser_user),
+):
+    sb = get_supabase()
+    organiser_id = current_user["organiser_id"]
+
+    # verify the row belongs to this organiser via event
+    row = sb.table("organiser_visitor_rows").select(
+        "id, organiser_event_id"
+    ).eq("id", row_id).maybe_single().execute()
+    if not row or not row.data:
+        raise HTTPException(status_code=404, detail="Row not found")
+
+    event = sb.table("organiser_events").select("id").eq(
+        "id", row.data["organiser_event_id"]
+    ).eq("organiser_id", organiser_id).maybe_single().execute()
+    if not event or not event.data:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    sb.table("organiser_visitor_rows").update(
+        {"raw_data": body.dict()}
+    ).eq("id", row_id).execute()
+
+    return {"message": "Row updated"}
+
+
+@router.delete("/organiser/visitor-rows/{row_id}")
+def delete_visitor_row(
+    row_id: str,
+    current_user: dict = Depends(get_current_organiser_user),
+):
+    sb = get_supabase()
+    organiser_id = current_user["organiser_id"]
+
+    row = sb.table("organiser_visitor_rows").select(
+        "id, organiser_event_id"
+    ).eq("id", row_id).maybe_single().execute()
+    if not row or not row.data:
+        raise HTTPException(status_code=404, detail="Row not found")
+
+    event = sb.table("organiser_events").select("id").eq(
+        "id", row.data["organiser_event_id"]
+    ).eq("organiser_id", organiser_id).maybe_single().execute()
+    if not event or not event.data:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    sb.table("organiser_visitor_rows").delete().eq("id", row_id).execute()
+
+    # decrement data_used
+    org = sb.table("organisers").select("data_used").eq(
+        "id", organiser_id
+    ).maybe_single().execute()
+    if org and org.data and org.data["data_used"] > 0:
+        sb.table("organisers").update(
+            {"data_used": org.data["data_used"] - 1}
+        ).eq("id", organiser_id).execute()
+
+    return {"message": "Row deleted"}
