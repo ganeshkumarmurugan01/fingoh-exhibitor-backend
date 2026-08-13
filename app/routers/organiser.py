@@ -1204,23 +1204,27 @@ def import_organiser_rows(
     imported = 0
     for row in rows.data:
         d = row["raw_data"] or {}
-        contact = {
-            "id":          str(uuid.uuid4()),
-            "org_id":      org_id,
-            "event_id":    event_id,
-            "first_name":  d.get("first_name", ""),
-            "last_name":   d.get("last_name", ""),
-            "email":       d.get("email", ""),
-            "company":     d.get("company", ""),
-            "job_title":   d.get("job_title", ""),
-            "country":     d.get("country", ""),
-            "city":        d.get("city", ""),
-            "phone":       d.get("phone", ""),
-            "linkedin_url":d.get("linkedin_url", ""),
+        first = d.get("first_name", "")
+        last  = d.get("last_name", "")
+        name  = f"{first} {last}".strip() or d.get("name", "Unknown")
+        raw   = {
+            "linkedin_url":        d.get("linkedin_url", ""),
             "categories_interest": d.get("categories_interest", ""),
             "primary_reason":      d.get("primary_reason", ""),
             "company_size":        d.get("company_size", ""),
             "incumbent_vendor":    d.get("incumbent_vendor", ""),
+        }
+        contact = {
+            "id":          str(uuid.uuid4()),
+            "event_id":    event_id,
+            "name":        name,
+            "email":       d.get("email", ""),
+            "company":     d.get("company", ""),
+            "designation": d.get("job_title", ""),
+            "country":     d.get("country", ""),
+            "city":        d.get("city", ""),
+            "phone":       d.get("phone", ""),
+            "raw_data":    raw,
             "source":      "organiser_import",
         }
         try:
