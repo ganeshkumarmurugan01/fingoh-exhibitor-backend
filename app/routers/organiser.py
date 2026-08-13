@@ -504,12 +504,12 @@ async def invite_exhibitor(
         raise HTTPException(status_code=409, detail="Exhibitor already invited to this event")
 
     # check if exhibitor already has a Fingoh account
-    existing_org = sb.table("organisations").select(
-        "id"
-    ).eq("admin_email", body.invite_email.lower().strip()).maybe_single().execute()
+    existing_org = sb.table("profiles").select(
+        "org_id"
+    ).eq("email", body.invite_email.lower().strip()).maybe_single().execute()
+    exhibitor_id = existing_org.data["org_id"] if existing_org and existing_org.data else None
+    is_existing = bool(exhibitor_id)
 
-    is_existing = bool(existing_org and existing_org.data)
-    exhibitor_id = existing_org.data["id"] if is_existing else None
 
     # generate invite token
     invite_token = secrets.token_urlsafe(32)
