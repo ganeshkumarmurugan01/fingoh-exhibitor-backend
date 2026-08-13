@@ -843,7 +843,7 @@ async def accept_invite(token: str, request: Request):
 
     try:
         user = await get_current_user(request)
-        org_id = get_user_org(user["sub"], sb)
+        org_id = get_user_org(user["user_id"], sb)
     except HTTPException:
         raise
     except Exception:
@@ -1097,7 +1097,7 @@ async def get_organiser_pool(
     sb = get_supabase()
     try:
         user = await get_current_user(request)
-        org_id = get_user_org(user["sub"], sb)
+        org_id = get_user_org(user["user_id"], sb)
     except HTTPException:
         raise
     except Exception:
@@ -1159,7 +1159,7 @@ async def import_organiser_rows(
     sb = get_supabase()
     try:
         user = await get_current_user(request)
-        org_id = get_user_org(user["sub"], sb)
+        org_id = get_user_org(user["user_id"], sb)
     except HTTPException:
         raise
     except Exception:
