@@ -426,6 +426,7 @@ async def send_organiser_invite_email(
                 },
             )
         print(f"[invite email] Zoho API status: {resp.status_code} → {invite_email}")
+        print(f"[invite email] Zoho response body: {resp.text}")
     except Exception as e:
         print(f"[invite email] Failed: {e}")
 
