@@ -398,30 +398,29 @@ async def send_organiser_invite_email(
 <p style="margin:0;font-size:11px;color:#94A3B8;">{footer_text}</p>
 </td></tr></table></td></tr></table></body></html>"""
 
-    # send via Zoho
-    zoho_user     = os.environ.get("ZOHO_MAIL_USER", "hello@fingoh.ai")
-    zoho_password = os.environ.get("ZOHO_MAIL_PASSWORD", "")
-
-    if not zoho_password:
-        print(f"[invite email] No ZOHO_MAIL_PASSWORD set — skipping email to {invite_email}")
-        return
-
-    import smtplib
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"You're invited to join {event_name} on Fingoh"
-    msg["From"]    = f"{sender_name} <{zoho_user}>"
-    msg["To"]      = invite_email
-    msg["Reply-To"] = reply_to
-    msg.attach(MIMEText(full_html, "html"))
-
+    # send via Zoho OAuth API (same as meetings/onboarding)
     try:
-        with smtplib.SMTP_SSL("smtp.zoho.in", 465) as server:
-            server.login(zoho_user, zoho_password)
-            server.sendmail(zoho_user, invite_email, msg.as_string())
-        print(f"[invite email] Sent to {invite_email}")
+        from app.routers.meetings import get_zoho_access_token
+        ZOHO_ACCOUNT_ID = os.getenv("ZOHO_ACCOUNT_ID", "5733662000000008002")
+        ZOHO_FROM_EMAIL = os.getenv("ZOHO_FROM_EMAIL", "hello@fingoh.ai")
+
+        access_token = await get_zoho_access_token()
+
+        import httpx
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"https://mail.zoho.com/api/accounts/{ZOHO_ACCOUNT_ID}/messages",
+                headers={"Authorization": f"Zoho-oauthtoken {access_token}"},
+                json={
+                    "fromAddress": ZOHO_FROM_EMAIL,
+                    "toAddress":   invite_email,
+                    "replyTo":     reply_to,
+                    "subject":     f"You're invited to join {event_name} on Fingoh",
+                    "mailFormat":  "html",
+                    "content":     full_html,
+                },
+            )
+        print(f"[invite email] Zoho API status: {resp.status_code} → {invite_email}")
     except Exception as e:
         print(f"[invite email] Failed: {e}")
 
