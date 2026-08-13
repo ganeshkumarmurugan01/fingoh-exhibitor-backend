@@ -344,6 +344,7 @@ class UpdateAllocationRequest(BaseModel):
 async def send_organiser_invite_email(
     invite_email: str,
     organiser_name: str,
+    organiser_contact_email: str,
     event_name: str,
     invite_token: str,
     is_existing: bool,
@@ -351,14 +352,17 @@ async def send_organiser_invite_email(
     """Send invite email via the platform email system."""
     sb = get_supabase()
 
-    # fetch platform email config
-    cfg_result = sb.table("platform_email_config").select("*").maybe_single().execute()
-    cfg = cfg_result.data if cfg_result and cfg_result.data else {}
+    # fetch platform email config - use defaults if table not found
+    try:
+        cfg_result = sb.table("email_config").select("*").limit(1).execute()
+        cfg = cfg_result.data[0] if cfg_result and cfg_result.data else {}
+    except Exception:
+        cfg = {}
 
-    sender_name    = cfg.get("sender_name", "Fingoh")
+    sender_name   = f"Fingoh (on behalf of {organiser_name})"
     reply_to       = cfg.get("reply_to", "hello@fingoh.ai")
     primary_color  = cfg.get("primary_color", "#0D1B3E")
-    footer_text    = cfg.get("footer_text", "Sent via Fingoh · Intent Intelligence for B2B Trade Fairs")
+    footer_text   = f"Sent by Fingoh on behalf of {organiser_name} · Intent Intelligence for B2B Trade Fairs"
     logo_url       = cfg.get("logo_url", "")
 
     # build accept URL
@@ -415,7 +419,7 @@ async def send_organiser_invite_email(
                     "fromAddress": ZOHO_FROM_EMAIL,
                     "toAddress":   invite_email,
                     "replyTo":     reply_to,
-                    "subject":     f"You're invited to join {event_name} on Fingoh",
+                    "subject":     f"{organiser_name} has invited you to join {event_name} on Fingoh",
                     "mailFormat":  "html",
                     "content":     full_html,
                 },
@@ -541,6 +545,7 @@ async def invite_exhibitor(
         await send_organiser_invite_email(
             invite_email=body.invite_email.lower().strip(),
             organiser_name=org.data["name"],
+            organiser_contact_email=org.data.get("contact_email", "hello@fingoh.ai"),
             event_name=event.data["name"],
             invite_token=invite_token,
             is_existing=is_existing,
