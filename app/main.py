@@ -55,7 +55,7 @@ app.include_router(admin.router, prefix=API_PREFIX)
 app.include_router(agent.router, prefix=API_PREFIX)
 app.include_router(email_config.router, prefix=API_PREFIX)
 app.include_router(offerings.router, prefix=API_PREFIX)
-app.include_router(organiser.router)
+app.include_router(organiser.router, prefix=API_PREFIX)
 
 @app.get("/health", tags=["system"])
 def health():
