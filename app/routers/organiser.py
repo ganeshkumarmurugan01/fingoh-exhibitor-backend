@@ -9,7 +9,7 @@ from typing import Optional
 
 import bcrypt
 from jose import jwt
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
 from supabase import create_client, Client
@@ -833,23 +833,19 @@ def validate_invite_token(token: str):
 
 
 @router.post("/organiser/invite/accept/{token}")
-def accept_invite(token: str, x_fingoh_auth: Optional[str] = Header(None)):
+async def accept_invite(token: str, request: Request):
     """
     Called by exhibitor app after login/registration.
     Links the exhibitor's org to the organiser event.
     """
+    from app.auth import get_current_user, get_user_org
     sb = get_supabase()
 
-    if not x_fingoh_auth:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    # get exhibitor org from their auth token
-    from app.routers.onboarding import get_current_user
     try:
-        user = get_current_user(x_fingoh_auth)
-        org_id = user.get("org_id")
-        if not org_id:
-            raise HTTPException(status_code=401, detail="No organisation found for this user")
+        user = await get_current_user(request)
+        org_id = get_user_org(user["sub"], sb)
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid authentication token")
 
@@ -1090,19 +1086,20 @@ def delete_visitor_row(
 
 # ── Exhibitor-side: browse and import organiser visitor pool ──────────────────
 @router.get("/organiser/pool/{organiser_event_id}")
-def get_organiser_pool(
+async def get_organiser_pool(
     organiser_event_id: str,
+    request: Request,
     page: int = 1,
     page_size: int = 50,
-    x_fingoh_auth: Optional[str] = Header(None),
 ):
     """Called by exhibitor app to browse available visitor rows."""
-    from app.routers.onboarding import get_current_user
-    if not x_fingoh_auth:
-        raise HTTPException(status_code=401, detail="Authentication required")
+    from app.auth import get_current_user, get_user_org
+    sb = get_supabase()
     try:
-        user = get_current_user(x_fingoh_auth)
-        org_id = user.get("org_id")
+        user = await get_current_user(request)
+        org_id = get_user_org(user["sub"], sb)
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -1149,21 +1146,22 @@ def get_organiser_pool(
 
 
 @router.post("/organiser/import/{organiser_event_id}")
-def import_organiser_rows(
+async def import_organiser_rows(
     organiser_event_id: str,
     body: dict,
-    x_fingoh_auth: Optional[str] = Header(None),
+    request: Request,
 ):
     """
     Import selected visitor rows from organiser pool into exhibitor's audience.
     body: { "row_ids": [...], "event_id": "exhibitor_event_id" }
     """
-    from app.routers.onboarding import get_current_user
-    if not x_fingoh_auth:
-        raise HTTPException(status_code=401, detail="Authentication required")
+    from app.auth import get_current_user, get_user_org
+    sb = get_supabase()
     try:
-        user = get_current_user(x_fingoh_auth)
-        org_id = user.get("org_id")
+        user = await get_current_user(request)
+        org_id = get_user_org(user["sub"], sb)
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
 
