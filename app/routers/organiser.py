@@ -421,7 +421,7 @@ async def send_organiser_invite_email(
                     "toAddress":   invite_email,
                     "subject":     f"{organiser_name} has invited you to join {event_name} on Fingoh",
                     "mailFormat":  "html",
-                    "content":     full_html,
+                    "content":     f"<p>{organiser_name} invited you to {event_name}.</p>",
                 },
             )
         print(f"[invite email] Zoho API status: {resp.status_code} → {invite_email}")
