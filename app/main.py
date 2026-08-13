@@ -17,6 +17,7 @@ from app.routers import admin
 from app.routers import agent
 from app.routers import email_config
 from app.routers import offerings
+from app.routers import router as organiser_router
 
 settings = get_settings()
 
@@ -54,6 +55,7 @@ app.include_router(admin.router, prefix=API_PREFIX)
 app.include_router(agent.router, prefix=API_PREFIX)
 app.include_router(email_config.router, prefix=API_PREFIX)
 app.include_router(offerings.router, prefix=API_PREFIX)
+app.include_router(organiser.router)
 
 @app.get("/health", tags=["system"])
 def health():
