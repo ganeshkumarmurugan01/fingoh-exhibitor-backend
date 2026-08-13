@@ -579,7 +579,7 @@ def list_event_exhibitors(
 
     links = sb.table("organiser_exhibitor_links").select("*").eq(
         "organiser_event_id", event_id
-    ).order("invited_at", desc=True).execute()
+    ).neq("status", "removed").order("invited_at", desc=True).execute()
 
     return links.data or []
 
@@ -629,9 +629,7 @@ def remove_exhibitor(
     if not link or not link.data:
         raise HTTPException(status_code=404, detail="Link not found")
 
-    sb.table("organiser_exhibitor_links").update(
-        {"status": "removed"}
-    ).eq("id", link_id).execute()
+    sb.table("organiser_exhibitor_links").delete().eq("id", link_id).execute()
 
     # decrement exhibitor_used
     org = sb.table("organisers").select("exhibitor_used").eq(
