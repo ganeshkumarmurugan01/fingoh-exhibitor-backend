@@ -41,15 +41,19 @@ def create_organiser_token(user_id: str, organiser_id: str, role: str) -> str:
 
 def decode_organiser_token(token: str) -> dict:
     try:
-        token = token.replace("Bearer ", "").strip()
-    payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+        if token and token.startswith("Bearer "):
+            token = token[7:]
+        token = token.strip()
+        from jose import jwt as jose_jwt
+        from jose.exceptions import ExpiredSignatureError
+        payload = jose_jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
         if payload.get("type") != "organiser":
             raise HTTPException(status_code=401, detail="Invalid token type")
         return payload
-    except jwt.ExpiredSignatureError:
+    except ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 
 
 def get_current_organiser_user(x_fingoh_auth: Optional[str] = Header(None)) -> dict:
