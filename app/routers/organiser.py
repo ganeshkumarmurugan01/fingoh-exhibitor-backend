@@ -92,7 +92,7 @@ class UpdateOrganiserEventRequest(BaseModel):
 
 
 # ── Auth routes ──────────────────────────────────────────────────────────────
-@router.post("/login")
+@router.post("/organiser/login")
 def organiser_login(body: OrganiserLoginRequest):
     sb = get_supabase()
 
@@ -142,7 +142,7 @@ def organiser_login(body: OrganiserLoginRequest):
     }
 
 
-@router.get("/me")
+@router.get("/organiser/me")
 def organiser_me(current_user: dict = Depends(get_current_organiser_user)):
     sb = get_supabase()
 
@@ -167,7 +167,7 @@ def organiser_me(current_user: dict = Depends(get_current_organiser_user)):
 
 
 # ── Organiser Event routes ───────────────────────────────────────────────────
-@router.post("/events")
+@router.post("/organiser/events")
 def create_organiser_event(
     body: CreateOrganiserEventRequest,
     current_user: dict = Depends(get_current_organiser_user),
@@ -194,7 +194,7 @@ def create_organiser_event(
     return result.data[0]
 
 
-@router.get("/events")
+@router.get("/organiser/events")
 def list_organiser_events(current_user: dict = Depends(get_current_organiser_user)):
     sb = get_supabase()
     organiser_id = current_user["organiser_id"]
@@ -206,7 +206,7 @@ def list_organiser_events(current_user: dict = Depends(get_current_organiser_use
     return result.data or []
 
 
-@router.get("/events/{event_id}")
+@router.get("/organiser/events/{event_id}")
 def get_organiser_event(
     event_id: str,
     current_user: dict = Depends(get_current_organiser_user),
@@ -224,7 +224,7 @@ def get_organiser_event(
     return result.data
 
 
-@router.patch("/events/{event_id}")
+@router.patch("/organiser/events/{event_id}")
 def update_organiser_event(
     event_id: str,
     body: UpdateOrganiserEventRequest,
@@ -253,7 +253,7 @@ def update_organiser_event(
 # ── Admin-only: create organiser account ─────────────────────────────────────
 # Called from fingoh-admin backend — protected by admin JWT (handled in admin.py)
 # Exposed here as an internal utility endpoint
-@router.post("/admin/create-organiser")
+@router.post("/organiser/admin/create-organiser")
 def admin_create_organiser(
     body: CreateOrganiserRequest,
     x_fingoh_admin_key: Optional[str] = Header(None),
