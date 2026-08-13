@@ -403,6 +403,7 @@ async def send_organiser_invite_email(
 </td></tr></table></td></tr></table></body></html>"""
 
     # send via Zoho OAuth API (same as meetings/onboarding)
+    print(f"[invite email] starting Zoho send to {invite_email}")
     try:
         from app.routers.meetings import get_zoho_access_token
         ZOHO_ACCOUNT_ID = os.getenv("ZOHO_ACCOUNT_ID", "5733662000000008002")
