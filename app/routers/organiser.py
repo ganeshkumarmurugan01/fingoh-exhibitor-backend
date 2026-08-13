@@ -403,7 +403,6 @@ async def send_organiser_invite_email(
 </td></tr></table></td></tr></table></body></html>"""
 
     # send via Zoho OAuth API (same as meetings/onboarding)
-    print(f"[invite email] starting Zoho send to {invite_email}")
     try:
         from app.routers.meetings import get_zoho_access_token
         ZOHO_ACCOUNT_ID = os.getenv("ZOHO_ACCOUNT_ID") or "670863000000008002"
@@ -421,11 +420,10 @@ async def send_organiser_invite_email(
                     "toAddress":   invite_email,
                     "subject":     f"{organiser_name} has invited you to join {event_name} on Fingoh",
                     "mailFormat":  "html",
-                    "content":     f"<p>{organiser_name} invited you to {event_name}.</p>",
+                    "content":     full_html,
                 },
             )
         print(f"[invite email] Zoho API status: {resp.status_code} → {invite_email}")
-        print(f"[invite email] Zoho response body: {resp.text}")
     except Exception as e:
         print(f"[invite email] Failed: {e}")
 
