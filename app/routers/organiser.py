@@ -869,7 +869,7 @@ async def accept_invite(token: str, request: Request):
     ).maybe_single().execute()
 
     event = sb.table("organiser_events").select(
-        "name, industry_vertical"
+        "name, industry_vertical, venue, start_date, end_date"
     ).eq("id", event_id).maybe_single().execute()
 
     organiser_name = organiser.data["name"] if organiser and organiser.data else "Organiser"
@@ -893,8 +893,20 @@ async def accept_invite(token: str, request: Request):
         event_payload = {
             "id":                 str(uuid.uuid4()),
             "org_id":             org_id,
+            "created_by":         user["user_id"],
             "name":               event.data["name"],
+            "type":               "trade_fair",
+            "type_label":         "Trade Fair",
             "industry_vertical":  event.data.get("industry_vertical", "general"),
+            "venue":              event.data.get("venue", ""),
+            "date_from":          event.data.get("start_date", None),
+            "date_to":            event.data.get("end_date", None),
+            "country":            "",
+            "company":            "",
+            "product":            "",
+            "website":            "",
+            "booth_size":         "",
+            "iei_credits":        0,
             "organiser_event_id": event_id,
             "status":             "active",
         }
