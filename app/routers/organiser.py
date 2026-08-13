@@ -419,7 +419,6 @@ async def send_organiser_invite_email(
                 json={
                     "fromAddress": ZOHO_FROM_EMAIL,
                     "toAddress":   invite_email,
-                    "replyTo":     reply_to,
                     "subject":     f"{organiser_name} has invited you to join {event_name} on Fingoh",
                     "mailFormat":  "html",
                     "content":     full_html,
