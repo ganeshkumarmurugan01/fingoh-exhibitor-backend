@@ -41,13 +41,14 @@ def create_organiser_token(user_id: str, organiser_id: str, role: str) -> str:
 
 def decode_organiser_token(token: str) -> dict:
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+        token = token.replace("Bearer ", "").strip()
+    payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
         if payload.get("type") != "organiser":
             raise HTTPException(status_code=401, detail="Invalid token type")
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
+    except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
