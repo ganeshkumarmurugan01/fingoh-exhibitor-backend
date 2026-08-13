@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
 from supabase import create_client, Client
 
-router = APIRouter(prefix="/organiser", tags=["organiser"])
+router = APIRouter(tags=["organiser"])
 
 # ── Supabase client ──────────────────────────────────────────────────────────
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
