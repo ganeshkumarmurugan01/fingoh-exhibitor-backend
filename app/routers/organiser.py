@@ -497,9 +497,9 @@ async def invite_exhibitor(
     # check if already invited
     existing = sb.table("organiser_exhibitor_links").select("id, status").eq(
         "organiser_event_id", event_id
-    ).eq("invite_email", body.invite_email.lower().strip()).maybe_single().execute()
+    ).eq("invite_email", body.invite_email.lower().strip()).eq("status", "invited").limit(1).execute()
 
-    if existing and existing.data:
+    if existing and existing.data and len(existing.data) > 0:
         raise HTTPException(status_code=409, detail="Exhibitor already invited to this event")
 
     # check if exhibitor already has a Fingoh account
@@ -536,14 +536,17 @@ async def invite_exhibitor(
         {"exhibitor_used": org.data["exhibitor_used"] + 1}
     ).eq("id", organiser_id).execute()
 
-    # send invite email async
-    await send_organiser_invite_email(
-        invite_email=body.invite_email.lower().strip(),
-        organiser_name=org.data["name"],
-        event_name=event.data["name"],
-        invite_token=invite_token,
-        is_existing=is_existing,
-    )
+    # send invite email - fire and forget, don't fail invite if email fails
+    try:
+        await send_organiser_invite_email(
+            invite_email=body.invite_email.lower().strip(),
+            organiser_name=org.data["name"],
+            event_name=event.data["name"],
+            invite_token=invite_token,
+            is_existing=is_existing,
+        )
+    except Exception as e:
+        print(f"[invite] Email failed but invite created: {e}")
 
     return {
         "message":      "Invite sent successfully",
