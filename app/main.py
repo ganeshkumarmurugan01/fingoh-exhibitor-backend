@@ -17,7 +17,7 @@ from app.routers import admin
 from app.routers import agent
 from app.routers import email_config
 from app.routers import offerings
-from app.routers import router as organiser_router
+from app.routers import organiser
 
 settings = get_settings()
 
