@@ -1277,9 +1277,9 @@ async def import_organiser_rows(
 
     # trigger rescore in background
     try:
-        import asyncio
-        from app.routers.audience import rescore_all
-        asyncio.ensure_future(rescore_all(event_id))
+        import httpx as _httpx
+        _base = os.getenv("RAILWAY_INTERNAL_URL", "http://localhost:8080")
+        _httpx.post(f"{_base}/api/v1/audience/rescore/{event_id}", timeout=5)
     except Exception:
         pass
 
