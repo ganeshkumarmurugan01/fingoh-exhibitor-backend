@@ -1275,13 +1275,17 @@ async def import_organiser_rows(
         "organiser_id"
     ).eq("id", organiser_event_id).maybe_single().execute().data["organiser_id"]).maybe_single().execute()
 
-    # trigger rescore in background
+    # trigger rescore synchronously
     try:
-        import httpx as _httpx
-        _base = os.getenv("RAILWAY_INTERNAL_URL", "http://localhost:8080")
-        _httpx.post(f"{_base}/api/v1/audience/rescore/{event_id}", timeout=5)
-    except Exception:
-        pass
+        from app.routers.audience import rescore_all
+        import asyncio
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(rescore_all(event_id))
+        else:
+            loop.run_until_complete(rescore_all(event_id))
+    except Exception as _re:
+        print(f"[organiser import] rescore error: {_re}")
 
     return {
         "message":  f"Successfully imported {imported} visitors",
