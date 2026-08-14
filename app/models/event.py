@@ -103,6 +103,8 @@ class EventResponse(BaseModel):
     website: Optional[str]
     booth_size: Optional[str]
     industry_vertical: Optional[str] = "general"
+    organiser_event_id: Optional[str] = None
+    organiser_powered_label: Optional[str] = None
     status: str
     created_by: Optional[str]
     created_at: str
