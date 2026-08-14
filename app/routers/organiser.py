@@ -9,7 +9,7 @@ from typing import Optional
 
 import bcrypt
 from jose import jwt
-from fastapi import APIRouter, HTTPException, Depends, Header, Request
+from fastapi import APIRouter, HTTPException, Depends, Header, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
 from supabase import create_client, Client
