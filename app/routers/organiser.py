@@ -1249,10 +1249,10 @@ async def import_organiser_rows(
             "source":      "organiser_import",
         }
         try:
-            sb.table("audience_contacts").insert(contact).execute()
+            sb.table("audience_contacts").upsert(contact, on_conflict="event_id,email").execute()
             imported += 1
-        except Exception:
-            pass  # skip duplicates
+        except Exception as e:
+            print(f"[organiser import] row skip: {e}")
 
     # update consumed count
     sb.table("organiser_exhibitor_links").update(
