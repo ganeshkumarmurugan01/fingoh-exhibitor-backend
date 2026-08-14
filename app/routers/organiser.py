@@ -889,6 +889,10 @@ async def accept_invite(token: str, request: Request):
 
     # create the exhibitor's event shell pre-filled from organiser event
     if event and event.data:
+        from app.routers.audience import _get_plan_limits
+        plan_limits = _get_plan_limits(sb, org_id)
+        initial_iei_credits = plan_limits["max_deep_iei"] * 10
+        def _get_initial_iei_credits(db, oid): return initial_iei_credits
         event_payload = {
             "id":                 str(uuid.uuid4()),
             "org_id":             org_id,
@@ -905,7 +909,7 @@ async def accept_invite(token: str, request: Request):
             "product":            "",
             "website":            "",
             "booth_size":         "",
-            "iei_credits":        0,
+            "iei_credits":        _get_initial_iei_credits(sb, org_id),
             "organiser_event_id": event_id,
             "status":             "active",
         }
@@ -1105,6 +1109,8 @@ async def get_organiser_pool(
 ):
     """Called by exhibitor app to browse available visitor rows."""
     from app.auth import get_current_user, get_user_org
+    from app.routers.audience import rescore_all
+    from fastapi import BackgroundTasks as BT
     sb = get_supabase()
     try:
         user = await get_current_user(request)
@@ -1161,6 +1167,7 @@ async def import_organiser_rows(
     organiser_event_id: str,
     body: dict,
     request: Request,
+    background_tasks: BackgroundTasks = None,
 ):
     """
     Import selected visitor rows from organiser pool into exhibitor's audience.
@@ -1267,6 +1274,14 @@ async def import_organiser_rows(
     ).eq("id", sb.table("organiser_events").select(
         "organiser_id"
     ).eq("id", organiser_event_id).maybe_single().execute().data["organiser_id"]).maybe_single().execute()
+
+    # trigger rescore in background
+    try:
+        import asyncio
+        from app.routers.audience import rescore_all
+        asyncio.ensure_future(rescore_all(event_id))
+    except Exception:
+        pass
 
     return {
         "message":  f"Successfully imported {imported} visitors",
