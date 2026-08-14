@@ -1275,15 +1275,11 @@ async def import_organiser_rows(
         "organiser_id"
     ).eq("id", organiser_event_id).maybe_single().execute().data["organiser_id"]).maybe_single().execute()
 
-    # trigger rescore synchronously
+    # trigger rescore directly (await since this is async)
     try:
         from app.routers.audience import rescore_all
-        import asyncio
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(rescore_all(event_id))
-        else:
-            loop.run_until_complete(rescore_all(event_id))
+        await rescore_all(event_id)
+        print(f"[organiser import] rescore complete for {event_id}")
     except Exception as _re:
         print(f"[organiser import] rescore error: {_re}")
 
