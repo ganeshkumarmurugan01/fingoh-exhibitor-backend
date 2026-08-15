@@ -274,6 +274,41 @@ def list_organisers(x_fingoh_admin_key: str = Header(None)):
         org["event_count"] = len(events.data) if events and events.data else 0
     return organisers
 
+
+@router.get("/organiser/my-invites")
+async def get_my_invites(request: Request):
+    """Get pending organiser invites for the logged-in exhibitor."""
+    from app.auth import get_current_user
+    sb = get_supabase()
+    try:
+        user = await get_current_user(request)
+    except HTTPException:
+        raise
+    # get user email from profiles
+    profile = sb.table("profiles").select("email").eq("id", user["user_id"]).maybe_single().execute()
+    if not profile or not profile.data:
+        return []
+    email = profile.data["email"]
+    # find pending invites
+    links = sb.table("organiser_exhibitor_links").select(
+        "id, invite_token, status, data_allocation, organiser_event_id, organiser_id, invited_at"
+    ).eq("invite_email", email.lower()).eq("status", "invited").execute()
+    if not links or not links.data:
+        return []
+    result = []
+    for link in links.data:
+        event = sb.table("organiser_events").select("name, venue, start_date, end_date").eq("id", link["organiser_event_id"]).maybe_single().execute()
+        organiser = sb.table("organisers").select("name").eq("id", link["organiser_id"]).maybe_single().execute()
+        result.append({
+            "link_id": link["id"],
+            "invite_token": link["invite_token"],
+            "data_allocation": link["data_allocation"],
+            "invited_at": link["invited_at"],
+            "event": event.data if event and event.data else {},
+            "organiser": organiser.data if organiser and organiser.data else {},
+        })
+    return result
+
 @router.post("/organiser/admin/create-organiser")
 def admin_create_organiser(
     body: CreateOrganiserRequest,
@@ -383,7 +418,7 @@ async def send_organiser_invite_email(
 
     # build accept URL
     base_url = os.environ.get("FRONTEND_URL", "https://exhibitor.fingoh.ai")
-    accept_url = f"{base_url}/organiser-invite?token={invite_token}"
+    accept_url = f"{base_url}?org_invite={invite_token}"
 
     action_text = "Connect your existing Fingoh account" if is_existing else "Create your account and join"
 
