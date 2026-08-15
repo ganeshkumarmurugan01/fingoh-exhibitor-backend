@@ -258,6 +258,22 @@ def update_organiser_event(
 # ── Admin-only: create organiser account ─────────────────────────────────────
 # Called from fingoh-admin backend — protected by admin JWT (handled in admin.py)
 # Exposed here as an internal utility endpoint
+
+@router.get("/organiser/admin/list-organisers")
+def list_organisers(x_fingoh_admin_key: str = Header(None)):
+    settings = get_settings()
+    if x_fingoh_admin_key != settings.fingoh_admin_internal_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    sb = get_supabase()
+    result = sb.table("organisers").select("*").order("created_at", desc=True).execute()
+    organisers = result.data or []
+    for org in organisers:
+        users = sb.table("organiser_users").select("id").eq("organiser_id", org["id"]).execute()
+        org["user_count"] = len(users.data) if users and users.data else 0
+        events = sb.table("organiser_events").select("id").eq("organiser_id", org["id"]).execute()
+        org["event_count"] = len(events.data) if events and events.data else 0
+    return organisers
+
 @router.post("/organiser/admin/create-organiser")
 def admin_create_organiser(
     body: CreateOrganiserRequest,
