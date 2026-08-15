@@ -383,7 +383,7 @@ async def send_organiser_invite_email(
 
     # build accept URL
     base_url = os.environ.get("FRONTEND_URL", "https://exhibitor.fingoh.ai")
-    accept_url = f"{base_url}/organiser-invite?token={invite_token}"
+    accept_url = f"{base_url}?org_invite={invite_token}"
 
     action_text = "Connect your existing Fingoh account" if is_existing else "Create your account and join"
 
