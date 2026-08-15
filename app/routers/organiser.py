@@ -261,8 +261,8 @@ def update_organiser_event(
 
 @router.get("/organiser/admin/list-organisers")
 def list_organisers(x_fingoh_admin_key: str = Header(None)):
-    settings = get_settings()
-    if x_fingoh_admin_key != settings.fingoh_admin_internal_key:
+    expected_key = os.getenv("FINGOH_ADMIN_INTERNAL_KEY", "")
+    if not expected_key or x_fingoh_admin_key != expected_key:
         raise HTTPException(status_code=403, detail="Forbidden")
     sb = get_supabase()
     result = sb.table("organisers").select("*").order("created_at", desc=True).execute()
