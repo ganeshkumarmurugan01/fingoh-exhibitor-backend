@@ -144,3 +144,49 @@ async def asset_counts_by_event(event_id: str, request: Request):
         counts[oid][atype] += 1
 
     return counts
+
+
+# ── Logo upload ──────────────────────────────────────────────────────────────
+LOGO_ALLOWED_MIMES = ["image/jpeg", "image/png", "image/webp", "image/svg+xml"]
+LOGO_MAX_BYTES = 2 * 1024 * 1024  # 2MB
+
+@router.post("/products/upload-logo")
+async def upload_logo(
+    request: Request,
+    file: UploadFile = File(...),
+    event_id: str = Form(...),
+):
+    user = await get_current_user(request)
+    sb = get_sb()
+    org_id = get_user_org(user["user_id"], sb)
+
+    if file.content_type not in LOGO_ALLOWED_MIMES:
+        raise HTTPException(400, "Invalid file type. Use JPG, PNG, WEBP or SVG.")
+
+    content = await file.read()
+    if len(content) > LOGO_MAX_BYTES:
+        raise HTTPException(400, "Logo too large. Max 2MB.")
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "png"
+    storage_path = f"{org_id}/{event_id}/logo/logo.{ext}"
+
+    try:
+        sb.storage.from_(BUCKET).remove([storage_path])
+    except:
+        pass
+
+    try:
+        sb.storage.from_(BUCKET).upload(
+            path=storage_path,
+            file=content,
+            file_options={"content-type": file.content_type, "upsert": "true"},
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Storage upload failed: {str(e)}")
+
+    signed = sb.storage.from_(BUCKET).create_signed_url(storage_path, 315_360_000)
+    logo_url = signed.get("signedURL") or signed.get("signedUrl", "")
+
+    sb.table("events").update({"logo_url": logo_url}).eq("id", event_id).execute()
+
+    return {"logo_url": logo_url}
