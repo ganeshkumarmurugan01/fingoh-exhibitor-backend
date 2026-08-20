@@ -142,6 +142,7 @@ def create_event(
         "product": payload.product,
         "website": payload.website,
         "booth_size": payload.booth_size,
+        "industry_vertical": payload.industry_vertical or "general",
         "iei_credits": initial_credits,
     }
     event_result = db.table("events").insert(event_row).execute()
@@ -423,6 +424,6 @@ async def get_events_for_staff(email: str):
     org_id = staff_res.data["org_id"]
 
     # Get events for this org
-    events_res = db.table("events").select("id,name,date_from,date_to,venue,status").eq("org_id", org_id).neq("status", "archived").execute()
+    events_res = db.table("events").select("id,name,date_from,date_to,venue,status,org_id").eq("org_id", org_id).neq("status", "archived").execute()
     return events_res.data or []
 

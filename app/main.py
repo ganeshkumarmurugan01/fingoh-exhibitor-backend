@@ -11,10 +11,14 @@ from app.routers import onboarding, events, staff
 from app.routers import audience
 from app.routers import meetings
 from app.routers import crm
+from app.routers import salesforce
+from app.routers import salesforce
 from app.routers import admin
 from app.routers import agent
 from app.routers import email_config
 from app.routers import offerings
+from app.routers import organiser
+from app.routers import products
 
 settings = get_settings()
 
@@ -46,10 +50,14 @@ app.include_router(staff.router, prefix=API_PREFIX)
 app.include_router(audience.router, prefix=API_PREFIX)
 app.include_router(meetings.router, prefix=API_PREFIX)
 app.include_router(crm.router, prefix=API_PREFIX)
+app.include_router(salesforce.router, prefix=API_PREFIX)
+app.include_router(salesforce.router, prefix=API_PREFIX)
 app.include_router(admin.router, prefix=API_PREFIX)
 app.include_router(agent.router, prefix=API_PREFIX)
 app.include_router(email_config.router, prefix=API_PREFIX)
 app.include_router(offerings.router, prefix=API_PREFIX)
+app.include_router(products.router, prefix="/api/v1")
+app.include_router(organiser.router, prefix=API_PREFIX)
 
 @app.get("/health", tags=["system"])
 def health():

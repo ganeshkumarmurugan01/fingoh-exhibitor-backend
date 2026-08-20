@@ -11,6 +11,20 @@ logger = logging.getLogger("fingoh.audience")
 router = APIRouter(prefix="/audience", tags=["audience"])
 
 MODAL_SCORER_URL  = os.getenv("MODAL_SCORER_URL")
+
+# Industry-specific scorer URLs
+MODAL_SCORER_URLS = {
+    "pharma":      os.getenv("MODAL_SCORER_URL_PHARMA"),
+    "electronics": os.getenv("MODAL_SCORER_URL_ELECTRONICS"),
+    "logistics":   os.getenv("MODAL_SCORER_URL_LOGISTICS"),
+    "general":     os.getenv("MODAL_SCORER_URL"),
+}
+MODAL_MEETING_SCORER_URLS = {
+    "pharma":      os.getenv("MODAL_MEETING_SCORER_URL_PHARMA"),
+    "electronics": os.getenv("MODAL_MEETING_SCORER_URL_ELECTRONICS"),
+    "logistics":   os.getenv("MODAL_MEETING_SCORER_URL_LOGISTICS"),
+    "general":     os.getenv("MEETING_SCORER_URL"),
+}
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 
@@ -125,6 +139,44 @@ def _parse_meeting_interest(val):
     return None
 
 # ── Claude enrichment — extracts signals for one visitor ─────────────────────
+# ── Industry-specific enrichment context ─────────────────────────────────────
+INDUSTRY_CONTEXT = {
+    "pharma": """Industry: Pharmaceutical, Biotech, Pharma Manufacturing, API & Excipients, Medical Devices, Pharma Packaging.
+Key buying signals: regulatory compliance needs, GMP/FDA/EMA/WHO PQ certifications, API sourcing, contract manufacturing, R&D pipeline expansion, serialisation, packaging line upgrades, lab equipment procurement, quality systems, cold chain validation.
+High-intent roles: Head of Procurement, VP Manufacturing, Regulatory Affairs Director, R&D Director, Supply Chain Head, QA/QC Manager, Plant Head, Technical Director.
+Trigger events: new drug approval, facility expansion, USFDA audit findings, patent cliff, biosimilar launch, capacity expansion, new market entry.
+
+COUNTRY REGULATORY INTELLIGENCE (critical for pharma scoring):
+- India: Major generic drug and API manufacturer. Companies export to US/EU/WHO markets. High procurement intent for GMP-compliant materials. Known for price sensitivity but volume buyers. Cross-border preference: buy from EU/US/Japan for compliance, local for cost.
+- USA: FDA 21 CFR compliance non-negotiable. Buyers highly specific in requirements. Long qualification cycles but high-value contracts. Preference: domestic or EU-GMP suppliers.
+- Germany/EU: EMA compliance, strict GMP. Process-oriented buyers with long evaluation cycles. Strong preference for EU-certified suppliers. Reluctant to buy from non-EU unless WHO PQ certified.
+- China: NMPA regulations, large domestic market, API exporter. Growing compliance maturity. Some geopolitical sourcing restrictions from Western buyers.
+- Japan: PMDA regulations, extremely high quality standards, very long evaluation cycles. Preference for domestic or established Western suppliers.
+- Middle East (UAE, Saudi, Egypt): Gulf Pharma Council, SFDA, EDA regulations. Growing local manufacturing. Often buy from India/EU. Strong relationship-driven procurement.
+- Southeast Asia (Thailand, Vietnam, Indonesia, Malaysia): WHO PQ focus, growing generics. Often buy from India/China. Increasing compliance requirements.
+- Brazil: ANVISA regulations, large market, complex import regulations. Prefer suppliers with ANVISA registration or equivalence.
+- Africa: WHO PQ is key. Donors (PEPFAR, Global Fund) often specify suppliers. Price-sensitive but volume buyers.
+
+CROSS-BORDER BUYING PATTERNS:
+- Indian pharma companies buying EU/US-compliant packaging = very high intent (export mandate)
+- EU buyers evaluating Indian API suppliers = high intent but long qualification
+- Middle Eastern buyers sourcing from India = high volume intent
+- Japanese buyers rarely buy from China = geopolitical preference signal
+- US buyers requiring FDA-registered foreign suppliers = very specific intent""",
+
+    "electronics": """Industry: Electronics Manufacturing, Semiconductors, VLSI, PCB, Deep Tech, IoT, Embedded Systems, Defence Electronics.
+Key buying signals: component sourcing, EMS partnerships, semiconductor supply chain, design-in opportunities, prototype evaluation, testing equipment, IP licensing.
+High-intent roles: VP Engineering, Hardware Design Lead, Procurement Manager, CTO, Supply Chain Director, R&D Head, Fab Manager.
+Trigger events: new product launch, chip shortage response, fab expansion, defence contract win, EV/IoT platform development.""",
+
+    "logistics": """Industry: Logistics, Warehousing, Supply Chain, Cold Chain, 3PL, Freight, Last-Mile Delivery, Customs & Trade.
+Key buying signals: WMS/TMS evaluation, automation & robotics, fleet expansion, cold chain infrastructure, customs digitisation, last-mile optimisation.
+High-intent roles: VP Logistics, Supply Chain Director, Warehouse Manager, Chief Supply Chain Officer, Fleet Manager, Operations Head.
+Trigger events: new distribution centre, e-commerce growth, regulatory change, contract renewal, ESG sustainability initiative.""",
+
+    "general": "",
+}
+
 async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncClient) -> dict:
     if not ANTHROPIC_API_KEY:
         return {}
@@ -151,7 +203,29 @@ async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncCli
     ex_intent    = event_ctx.get("intent_why") or ""
     ex_buyers    = event_ctx.get("intent_buyers") or ""
 
-    prompt = f"""You are an AI analyst for a B2B trade fair intelligence platform.
+    # Pharma-specific visitor fields from upload template
+    company_type        = visitor.get("company_type") or ""
+    regulatory_market   = visitor.get("regulatory_market") or ""
+    specific_product    = visitor.get("specific_product_interest") or ""
+    visit_timeline      = visitor.get("visit_timeline") or ""
+    incumbent_vendor    = visitor.get("incumbent_vendor") or ""
+    previous_edition    = visitor.get("previous_edition") or ""
+    export_markets      = visitor.get("export_markets") or ""
+    annual_procurement  = visitor.get("annual_procurement_value") or ""
+    linkedin_url        = visitor.get("linkedin_url") or ""
+
+    industry_vertical = event_ctx.get("industry_vertical") or "general"
+    industry_hint = INDUSTRY_CONTEXT.get(industry_vertical, "")
+    pharma_json_fields = """,
+  "country_regulatory_score": 0.0,
+  "procurement_mandate_score": 0.0,
+  "regulatory_compliance_focus": 0.0,
+  "company_type_match": 0.0,
+  "sourcing_specificity_score": 0.0,
+  "repeat_buyer_potential": 0.0""" if industry_vertical == "pharma" else ""
+
+    prompt = f"""You are an AI analyst for a B2B trade fair intelligence platform specialised in {industry_vertical.upper()} industry intelligence.
+{f"INDUSTRY CONTEXT: {industry_hint}" if industry_hint else ""}
 
 EXHIBITOR CONTEXT:
 - Company: {ex_company}
@@ -170,7 +244,16 @@ VISITOR TO ANALYSE:
 - Company: {company}
 - Country: {country}
 - Declared visit reason: {reason}
-- Categories of interest: {categories}
+- Categories of interest: {categories}{f"""
+- Company type: {company_type}""" if company_type else ""}{f"""
+- Regulatory markets: {regulatory_market}""" if regulatory_market else ""}{f"""
+- Specific product interest: {specific_product}""" if specific_product else ""}{f"""
+- Purchase timeline: {visit_timeline}""" if visit_timeline else ""}{f"""
+- Export markets: {export_markets}""" if export_markets else ""}{f"""
+- Incumbent vendor: {incumbent_vendor}""" if incumbent_vendor else ""}{f"""
+- Previous edition attendee: {previous_edition}""" if previous_edition else ""}{f"""
+- Annual procurement value: {annual_procurement}""" if annual_procurement else ""}{f"""
+- LinkedIn: {linkedin_url}""" if linkedin_url else ""}
 
 Using your knowledge of this person's role, company, and industry context, estimate the following intent signals as decimal values between 0.0 and 1.0.
 
@@ -185,7 +268,7 @@ Respond ONLY with a valid JSON object — no explanation, no markdown:
   "tech_stack_compatibility": 0.0,
   "competitive_displacement": 0.0,
   "profile_completeness": 0.0,
-  "enrichment_notes": "brief reason for scores"
+  "enrichment_notes": "brief reason for scores"{pharma_json_fields}
 }}
 
 Rules:
@@ -193,7 +276,15 @@ Rules:
 - seniority_score: buying authority (1.0 = CEO/CXO, 0.75 = Director/VP, 0.5 = Manager, 0.3 = Analyst)
 - buying_cycle_stage: evidence of active evaluation (1.0 = active RFP/procurement, 0.5 = researching, 0.1 = awareness)
 - trigger_event_score: recent company signals like funding, expansion, new hire (0-1)
-- Be honest — if you have no data, use 0.3 as neutral, not 0.0"""
+- Be honest — if you have no data, use 0.3 as neutral, not 0.0{"" if industry_vertical != "pharma" else """
+
+PHARMA-SPECIFIC SIGNALS (output these additional fields for pharma events):
+- country_regulatory_score: assess the visitor's country pharma regulatory environment and how it aligns with the exhibitor's products/certifications. Consider: (1) regulatory framework maturity of visitor's country, (2) cross-border buying patterns between visitor's country and exhibitor's country, (3) known sourcing preferences or restrictions of that country's pharma industry, (4) whether visitor's country exports to markets that require exhibitor's compliance standards. Score 0-1 where 1.0 = perfect regulatory/trade alignment.
+- procurement_mandate_score: likelihood of active procurement mandate vs passive evaluation. Consider declared reason, role, company type, company size. 1.0 = active RFP/tender, 0.7 = shortlisting vendors, 0.4 = evaluating options, 0.1 = awareness/browsing.
+- regulatory_compliance_focus: specificity of regulatory compliance interest. 1.0 = declared specific standard (GMP/FDA/WHO PQ), 0.6 = general compliance interest, 0.3 = no compliance signal.
+- company_type_match: how well visitor's company type matches exhibitor's ideal customer. Consider: pharma manufacturer, API producer, CMO/CDMO, packaging company, distributor, hospital/institution. Score based on fit with exhibitor's product.
+- sourcing_specificity_score: how specific is the declared or inferred sourcing need. 1.0 = very specific product/material declared, 0.6 = category declared, 0.3 = general interest, 0.1 = no specificity.
+- repeat_buyer_potential: based on company profile and country, likelihood this represents a recurring/repeat procurement relationship. Large established pharma companies from mature markets = higher. 1.0 = very likely repeat buyer, 0.3 = one-time or unclear."""}"""
 
     try:
         resp = await client.post(
@@ -213,19 +304,44 @@ Rules:
         resp.raise_for_status()
         text = resp.json()["content"][0]["text"]
         # Strip markdown fences if present
-        text = text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        return json.loads(text)
+        import re as _re
+        text = text.strip()
+        text = _re.sub(r'^```json\s*', '', text)
+        text = _re.sub(r'^```\s*', '', text)
+        text = _re.sub(r'\s*```$', '', text).strip()
+        # Try direct parse first
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # Extract just the JSON object, truncating any bad tail
+            match = _re.search(r'\{.*\}', text, _re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(0))
+                except Exception:
+                    pass
+            # Last resort: extract numeric fields only
+            result = {}
+            base_keys = ["seniority_score","icp_fit_score","company_size_match","categories_specificity","buying_cycle_stage","trigger_event_score","tech_stack_compatibility","competitive_displacement","profile_completeness"]
+            pharma_keys = ["country_regulatory_score","procurement_mandate_score","regulatory_compliance_focus","company_type_match","sourcing_specificity_score","repeat_buyer_potential"] if industry_vertical == "pharma" else []
+            for key in base_keys + pharma_keys:
+                m = _re.search(rf'"{key}"\s*:\s*([0-9.]+)', text)
+                if m:
+                    result[key] = float(m.group(1))
+            return result if result else {}
     except Exception as e:
         logger.error("Enrichment failed for %s: %s", name, e)
         return {}
 
 
 # ── Score batch via Modal XGBoost ─────────────────────────────────────────────
-async def _score_batch(rows: list[dict]) -> list[dict]:
-    if not MODAL_SCORER_URL:
+async def _score_batch(rows: list[dict], industry_vertical: str = "general") -> list[dict]:
+    url = MODAL_SCORER_URLS.get(industry_vertical) or MODAL_SCORER_URL
+    if not url:
         return [{"ieiScore": 50.0, "regProb": 0.5} for _ in rows]
+    logger.info("Scoring %d visitors via %s scorer", len(rows), industry_vertical)
     async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(MODAL_SCORER_URL, json={"visitors": rows})
+        resp = await client.post(url, json={"visitors": rows})
         resp.raise_for_status()
         return resp.json()["scores"]
 
@@ -353,7 +469,11 @@ async def rescore_all(
                 float(row.get("trigger_event_score") or 0.0)) * 0.15
         )
         iei = round(min(100.0, max(0.0, raw * 100)), 1)
-        tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
+        industry = row.get("industry_vertical", "general")
+        if industry == "pharma":
+            tier = "T1" if iei >= 62 else "T2" if iei >= 44 else "T3" if iei >= 34 else "T4"
+        else:
+            tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
         return iei, tier
 
     # Build rows with freshly computed icp_fit_score
@@ -389,19 +509,26 @@ async def rescore_all(
             "tech_stack_compatibility": _f("tech_stack_compatibility"),
             "previous_event_history":   _f("previous_event_history"),
             "profile_completeness":     _f("profile_completeness", 0.5),
-            "categories_specificity":   _f("categories_specificity"),
+             "categories_specificity":   _f("categories_specificity"),
+            # Pharma signal derivation fields — passed from raw_data/contact
+            "primary_reason":           c.get("primary_reason") or rd.get("primary_reason") or "",
+            "country":                  c.get("country") or rd.get("country") or "",
+            "categories_interest":      c.get("categories_interest") or rd.get("categories_interest") or "",
+            "job_title":                c.get("designation") or rd.get("job_title") or "",
             "_contact":                 c,
         })
 
     # Try XGBoost via Modal; fall back to rule-based if unavailable
-    use_modal = bool(MODAL_SCORER_URL)
+    industry_vertical = event_ctx.get("industry_vertical", "general")
+    effective_scorer_url = MODAL_SCORER_URLS.get(industry_vertical) or MODAL_SCORER_URL
+    use_modal = bool(effective_scorer_url)
     BATCH = 20
     scores = []
     if use_modal:
         try:
             modal_rows = [{k: v for k, v in r.items() if k != "_contact"} for r in rows]
             for i in range(0, len(modal_rows), BATCH):
-                batch_scores = await _score_batch(modal_rows[i:i+BATCH])
+                batch_scores = await _score_batch(modal_rows[i:i+BATCH], event_ctx.get("industry_vertical","general"))
                 scores.extend(batch_scores)
         except Exception as e:
             logger.warning("Modal scorer failed during rescore_all, falling back: %s", e)
@@ -418,11 +545,15 @@ async def rescore_all(
         else:
             iei, _ = _rule_based_iei(icp_fit, row)
 
-        tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
+        industry_vertical = event_ctx.get("industry_vertical", "general")
+        if industry_vertical == "pharma":
+            tier = "T1" if iei >= 62 else "T2" if iei >= 44 else "T3" if iei >= 34 else "T4"
+        else:
+            tier = "T1" if iei >= 75 else "T2" if iei >= 50 else "T3" if iei >= 25 else "T4"
         db.table("audience_contacts").update({
             "icp_fit_score": icp_fit,
             "iei_score":     iei,
-        }).eq("id", c["id"]).execute()
+            }).eq("id", c["id"]).execute()
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
         updated += 1
 
@@ -672,7 +803,7 @@ async def register_visitor(event_id: str, payload: RegistrationPayload):
         "previous_event_history":   safe(merged_signals.get("previous_event_history"), 0.0),
     }
 
-    scores = await _score_batch([score_row])
+    scores = await _score_batch([score_row], event_ctx.get("industry_vertical", "general"))
     new_iei = float(full.get("iei_score") or 43)
     new_reg = float(full.get("reg_prob") or 0.43)
     if scores:
@@ -743,7 +874,7 @@ async def rescore_one(event_id: str, email: str):
         "categories_specificity":   safe(raw.get("categories_specificity"), 0.0),
         "profile_completeness":     safe(raw.get("profile_completeness"), 0.5),
     }
-    scores = await _score_batch([row])
+    scores = await _score_batch([row], event_ctx.get("industry_vertical", "general"))
     if scores:
         iei  = round(float(scores[0].get("ieiScore", 43)), 2)
         reg  = round(float(scores[0].get("regProb", 0.43)), 4)
@@ -815,14 +946,51 @@ async def upload_audience(
     supabase = get_db()
 
     content = await file.read()
+    filename = (file.filename or "").lower()
+    logger.info("Upload attempt: filename=%s, content_type=%s, size=%d", filename, file.content_type, len(content))
     try:
-        reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
-        rows = list(reader)
-    except Exception:
-        raise HTTPException(400, "Could not parse CSV")
+        if filename.endswith(".xlsx") or filename.endswith(".xls"):
+            import openpyxl, io as _io
+            wb = openpyxl.load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
+            ws = wb.active
+            headers = [str(c.value or "").strip() for c in next(ws.iter_rows(min_row=1, max_row=1))]
+            rows = []
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                rows.append({headers[i]: (str(v).strip() if v is not None else "") for i, v in enumerate(row)})
+            wb.close()
+        else:
+            # Try UTF-8 first, fall back to latin-1 for files with special characters
+            try:
+                text = content.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text = content.decode("latin-1")
+            reader = csv.DictReader(io.StringIO(text))
+            rows = list(reader)
+    except Exception as e:
+        raise HTTPException(400, f"Could not parse file: {e}")
 
     if not rows:
         raise HTTPException(400, "Empty CSV")
+
+    # Validate mandatory fields — reject rows missing name and company
+    valid_rows = []
+    rejected_rows = []
+    for row in rows:
+        name = _get(row, "name") or f'{_get(row, "first_name") or ""} {_get(row, "last_name") or ""}'.strip()
+        company = _get(row, "company")
+        email = _get(row, "email")
+        missing = []
+        if not name:
+            missing.append("name")
+        if not company:
+            missing.append("company")
+        if not email:
+            missing.append("email")
+        if missing:
+            rejected_rows.append({"row": row, "missing": missing})
+        else:
+            valid_rows.append(row)
+    rows = valid_rows
 
     # ── Enforce contact cap for this org's plan ──────────────────────────────
     from app.auth import get_user_org
@@ -847,18 +1015,21 @@ async def upload_audience(
     # Enrich each visitor with Claude (parallel, max 5 concurrent)
     enriched_rows = []
     if ANTHROPIC_API_KEY:
-        async with httpx.AsyncClient() as client:
-            sem = asyncio.Semaphore(5)
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            sem = asyncio.Semaphore(8)
             async def enrich_one(row):
                 async with sem:
-                    signals = await _enrich_visitor(row, event_ctx, client)
+                    try:
+                        signals = await _enrich_visitor(row, event_ctx, client)
+                    except Exception:
+                        signals = {}
                     return {**row, **signals}
             enriched_rows = await asyncio.gather(*[enrich_one(r) for r in rows])
     else:
         enriched_rows = rows
 
     # Score with XGBoost via Modal
-    scored = await _score_batch(enriched_rows)
+    scored = await _score_batch(enriched_rows, event_ctx.get("industry_vertical", "general"))
 
     # ── Apply historical boost from previous edition ───────────────────────
     # Fetch previous_event_id for this event
@@ -901,10 +1072,12 @@ async def upload_audience(
     log_activity(get_db(), get_user_org(current_user["user_id"], get_db()), "contacts_uploaded", f"Uploaded {len(records)} contacts", current_user["user_id"], {"count": len(records), "event_id": event_id})
     return {
         "uploaded":    len(records),
+        "rejected":    len(rejected_rows),
+        "rejected_details": [{"missing": r["missing"]} for r in rejected_rows[:10]],
         "event_id":    event_id,
         "plan_limit":  max_contacts,
         "used_after":  existing_count + len(records),
-        "truncated":   len(rows) < (existing_count + len(records)),  # True if we cut rows
+        "truncated":   len(rows) < (existing_count + len(records)),
     }
 
 
@@ -1142,7 +1315,11 @@ Respond ONLY with valid JSON (no markdown):
         raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
 
     try:
+<<<<<<< HEAD
         async with httpx.AsyncClient(timeout=120) as client:
+=======
+        async with httpx.AsyncClient(timeout=175) as client:
+>>>>>>> dev
             resp = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={
@@ -1671,6 +1848,7 @@ async def delete_contact(
     db.table("agent_outputs").delete().eq("contact_id", contact_id).eq("event_id", event_id).execute()
     meeting_ids = [m["id"] for m in (db.table("meeting_requests").select("id").eq("contact_id", contact_id).eq("event_id", event_id).execute().data or [])]
     if meeting_ids:
+        db.table("meeting_tokens").delete().in_("meeting_id", meeting_ids).execute()
         db.table("meeting_requests").delete().in_("id", meeting_ids).execute()
     db.table("audience_contacts").delete().eq("id", contact_id).eq("event_id", event_id).execute()
 

@@ -17,6 +17,12 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
 MEETING_SCORER_URL = os.getenv("MEETING_SCORER_URL")
+MEETING_SCORER_URLS = {
+    "pharma":      os.getenv("MODAL_MEETING_SCORER_URL_PHARMA"),
+    "electronics": os.getenv("MODAL_MEETING_SCORER_URL_ELECTRONICS"),
+    "logistics":   os.getenv("MODAL_MEETING_SCORER_URL_LOGISTICS"),
+    "general":     os.getenv("MEETING_SCORER_URL"),
+}
 ZOHO_CLIENT_ID     = os.getenv("ZOHO_CLIENT_ID")
 ZOHO_CLIENT_SECRET = os.getenv("ZOHO_CLIENT_SECRET")
 ZOHO_REFRESH_TOKEN = os.getenv("ZOHO_REFRESH_TOKEN")
@@ -333,6 +339,10 @@ async def get_meeting_prospects(
     if not contacts:
         return []
 
+    # Get event details for industry vertical routing
+    event_res = db.table("events").select("name, company, industry_vertical").eq("id", event_id).maybe_single().execute()
+    event = event_res.data if event_res and event_res.data else {}
+
     # Get existing meeting requests to mark already-requested contacts
     meetings_res = db.table("meeting_requests").select(
         "id, contact_id, status, proposed_datetime, completed_at, actual_start_time, actual_end_time, duration_minutes, location, topic, staff_completion_notes, ai_analysis"
@@ -440,10 +450,12 @@ async def get_meeting_prospects(
 
     # Call Modal scorer if configured
     match_scores = {}
-    if MEETING_SCORER_URL:
+    event_vertical = event.get("industry_vertical") or "general"
+    meeting_scorer_url = MEETING_SCORER_URLS.get(event_vertical) or MEETING_SCORER_URL
+    if meeting_scorer_url:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(MEETING_SCORER_URL, json={"visitors": visitors_payload})
+                resp = await client.post(meeting_scorer_url, json={"visitors": visitors_payload})
                 if resp.status_code == 200:
                     scores = resp.json().get("scores", [])
                     for i, c in enumerate(contacts):
@@ -629,7 +641,7 @@ async def create_meeting_request(
     contact = contact_res.data
 
     # Get event details for company name
-    event_res = db.table("events").select("name, company").eq("id", payload.event_id).maybe_single().execute()
+    event_res = db.table("events").select("name, company, industry_vertical").eq("id", payload.event_id).maybe_single().execute()
     event = event_res.data if event_res and event_res.data else {}
 
     # Check no duplicate pending meeting
@@ -744,7 +756,7 @@ async def reschedule_meeting(
     contact = contact_res.data if contact_res and contact_res.data else {}
 
     # Get event details
-    event_res = db.table("events").select("name, company").eq("id", meeting["event_id"]).maybe_single().execute()
+    event_res = db.table("events").select("name, company, industry_vertical").eq("id", meeting["event_id"]).maybe_single().execute()
     event = event_res.data if event_res and event_res.data else {}
 
     # Update meeting record

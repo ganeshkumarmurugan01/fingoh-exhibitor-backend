@@ -93,7 +93,7 @@ async def list_customers(
         return []
 
     # Batch fetch all profiles and events in 2 queries
-    all_profiles = db.table("profiles").select("id,name,role,org_id").in_("org_id", org_ids).neq("role", "super_admin").execute()
+    all_profiles = db.table("profiles").select("id,name,role,org_id,email").in_("org_id", org_ids).neq("role", "super_admin").execute()
     all_events   = db.table("events").select("id,org_id").in_("org_id", org_ids).execute()
 
     # Group by org_id
@@ -216,6 +216,7 @@ async def create_customer(
         "id":     user_id,
         "org_id": org_id,
         "name":   payload.admin_name,
+        "email":  payload.admin_email,
         "role":   "admin",
         "title":  "Account Admin",
     }).execute()
@@ -253,7 +254,10 @@ async def update_customer(
     old_res = db.table("organisations").select("plan,status,name").eq("id", org_id).maybe_single().execute()
     old = old_res.data or {}
 
-    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    updates = {k: (None if k == "subscription_expires_at" and v == "" else v) for k, v in payload.model_dump().items() if v is not None}
+    # Coerce empty expiry date to None
+    if "subscription_expires_at" in updates and updates["subscription_expires_at"] == "":
+        updates["subscription_expires_at"] = None
     if not updates:
         raise HTTPException(400, "No fields to update")
 
@@ -448,6 +452,7 @@ async def add_user_to_org(
         "id":     user_id,
         "org_id": org_id,
         "name":   payload.name,
+        "email":  payload.email,
         "role":   payload.role,
         "title":  payload.title or "",
     }).execute()
