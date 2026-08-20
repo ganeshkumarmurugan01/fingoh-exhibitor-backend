@@ -41,6 +41,7 @@ class EventCreate(BaseModel):
     booth_size: Optional[str] = None
     industry_vertical: Optional[str] = None
     linkedin_url: Optional[str] = None
+    logo_url: Optional[str] = None
 
     # Step 3 — Target categories
     categories: List[str] = []
@@ -107,6 +108,7 @@ class EventResponse(BaseModel):
     organiser_event_id: Optional[str] = None
     organiser_powered_label: Optional[str] = None
     linkedin_url: Optional[str] = None
+    logo_url: Optional[str] = None
     status: str
     created_by: Optional[str]
     created_at: str

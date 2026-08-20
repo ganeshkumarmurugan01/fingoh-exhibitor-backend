@@ -29,7 +29,31 @@ def get_event_offerings_public(event_id: str):
     """Public endpoint for visitor registration - no auth required"""
     db = get_db()
     result = db.table("event_offerings").select("*").eq("event_id", event_id).order("display_order").execute()
-    return result.data or []
+    offerings = result.data or []
+
+    if not offerings:
+        return []
+
+    offering_ids = [o["id"] for o in offerings]
+    assets_res = db.table("offering_assets").select("*").in_("offering_id", offering_ids).execute()
+    assets = assets_res.data or []
+
+    asset_map = {}
+    for a in assets:
+        oid = a["offering_id"]
+        if oid not in asset_map:
+            asset_map[oid] = {"photos": [], "video": None, "brochure": None}
+        if a["asset_type"] == "photo":
+            asset_map[oid]["photos"].append(a["public_url"])
+        elif a["asset_type"] == "video":
+            asset_map[oid]["video"] = a["public_url"]
+        elif a["asset_type"] == "brochure":
+            asset_map[oid]["brochure"] = a["public_url"]
+
+    for o in offerings:
+        o["assets"] = asset_map.get(o["id"], {"photos": [], "video": None, "brochure": None})
+
+    return offerings
 
 @router.get("/event/{event_id}")
 def get_event_offerings(event_id: str, current_user: dict = Depends(get_current_user)):
