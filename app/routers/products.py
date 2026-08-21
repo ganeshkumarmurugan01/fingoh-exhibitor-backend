@@ -198,3 +198,54 @@ async def upload_logo(payload: LogoUploadPayload, request: Request):
     sb.table("events").update({"logo_url": logo_url}).eq("id", payload.event_id).execute()
 
     return {"logo_url": logo_url}
+
+
+# ── Banner upload ─────────────────────────────────────────────────────────────
+class BannerUploadPayload(BaseModel):
+    event_id: str
+    file_base64: str
+    file_name: str
+    content_type: str
+
+@router.post("/products/upload-banner")
+async def upload_banner(payload: BannerUploadPayload, request: Request):
+    user = await get_current_user(request)
+    sb = get_sb()
+    org_id = get_user_org(user["user_id"], sb)
+
+    ALLOWED = ["image/jpeg", "image/png", "image/webp"]
+    if payload.content_type not in ALLOWED:
+        raise HTTPException(400, "Invalid file type. Use JPG, PNG or WEBP.")
+
+    import base64 as b64mod
+    try:
+        content = b64mod.b64decode(payload.file_base64)
+    except Exception:
+        raise HTTPException(400, "Invalid base64 data.")
+
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(400, "Banner too large. Max 5MB.")
+
+    ext = payload.file_name.rsplit(".", 1)[-1].lower() if "." in payload.file_name else "jpg"
+    storage_path = f"{org_id}/{payload.event_id}/banner/banner.{ext}"
+
+    try:
+        sb.storage.from_(BUCKET).remove([storage_path])
+    except:
+        pass
+
+    try:
+        sb.storage.from_(BUCKET).upload(
+            path=storage_path,
+            file=content,
+            file_options={"content-type": payload.content_type, "upsert": "true"},
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Storage upload failed: {str(e)}")
+
+    signed = sb.storage.from_(BUCKET).create_signed_url(storage_path, 315_360_000)
+    banner_url = signed.get("signedURL") or signed.get("signedUrl", "")
+
+    sb.table("events").update({"banner_url": banner_url}).eq("id", payload.event_id).execute()
+
+    return {"banner_url": banner_url}
