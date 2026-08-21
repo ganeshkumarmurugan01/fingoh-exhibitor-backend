@@ -1315,11 +1315,7 @@ Respond ONLY with valid JSON (no markdown):
         raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
 
     try:
-<<<<<<< HEAD
-        async with httpx.AsyncClient(timeout=120) as client:
-=======
         async with httpx.AsyncClient(timeout=175) as client:
->>>>>>> dev
             resp = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={
