@@ -2067,3 +2067,5 @@ async def save_walk_in(payload: WalkInSaveRequest):
     }).execute()
 
     return {"ok": True, "contact_id": contact_id, "created": not bool(existing)}
+
+# force-redeploy: logo_url banner_url icp intent
