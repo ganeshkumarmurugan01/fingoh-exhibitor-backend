@@ -1,6 +1,7 @@
 import os
 import uuid
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
+from pydantic import BaseModel
 from supabase import create_client, Client
 from app.auth import get_current_user, get_user_org
 
@@ -150,25 +151,32 @@ async def asset_counts_by_event(event_id: str, request: Request):
 LOGO_ALLOWED_MIMES = ["image/jpeg", "image/png", "image/webp", "image/svg+xml"]
 LOGO_MAX_BYTES = 2 * 1024 * 1024  # 2MB
 
+class LogoUploadPayload(BaseModel):
+    event_id: str
+    file_base64: str
+    file_name: str
+    content_type: str
+
 @router.post("/products/upload-logo")
-async def upload_logo(
-    request: Request,
-    file: UploadFile = File(...),
-    event_id: str = Form(...),
-):
+async def upload_logo(payload: LogoUploadPayload, request: Request):
     user = await get_current_user(request)
     sb = get_sb()
     org_id = get_user_org(user["user_id"], sb)
 
-    if file.content_type not in LOGO_ALLOWED_MIMES:
+    if payload.content_type not in LOGO_ALLOWED_MIMES:
         raise HTTPException(400, "Invalid file type. Use JPG, PNG, WEBP or SVG.")
 
-    content = await file.read()
+    import base64 as b64mod
+    try:
+        content = b64mod.b64decode(payload.file_base64)
+    except Exception:
+        raise HTTPException(400, "Invalid base64 data.")
+
     if len(content) > LOGO_MAX_BYTES:
         raise HTTPException(400, "Logo too large. Max 2MB.")
 
-    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "png"
-    storage_path = f"{org_id}/{event_id}/logo/logo.{ext}"
+    ext = payload.file_name.rsplit(".", 1)[-1].lower() if "." in payload.file_name else "png"
+    storage_path = f"{org_id}/{payload.event_id}/logo/logo.{ext}"
 
     try:
         sb.storage.from_(BUCKET).remove([storage_path])
@@ -179,7 +187,7 @@ async def upload_logo(
         sb.storage.from_(BUCKET).upload(
             path=storage_path,
             file=content,
-            file_options={"content-type": file.content_type, "upsert": "true"},
+            file_options={"content-type": payload.content_type, "upsert": "true"},
         )
     except Exception as e:
         raise HTTPException(500, f"Storage upload failed: {str(e)}")
@@ -187,6 +195,6 @@ async def upload_logo(
     signed = sb.storage.from_(BUCKET).create_signed_url(storage_path, 315_360_000)
     logo_url = signed.get("signedURL") or signed.get("signedUrl", "")
 
-    sb.table("events").update({"logo_url": logo_url}).eq("id", event_id).execute()
+    sb.table("events").update({"logo_url": logo_url}).eq("id", payload.event_id).execute()
 
     return {"logo_url": logo_url}
