@@ -109,6 +109,7 @@ class EventResponse(BaseModel):
     organiser_powered_label: Optional[str] = None
     linkedin_url: Optional[str] = None
     logo_url: Optional[str] = None
+    banner_url: Optional[str] = None
     status: str
     created_by: Optional[str]
     created_at: str
