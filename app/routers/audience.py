@@ -831,24 +831,25 @@ def get_registration_info(event_id: str):
     db = get_db()
     ev = db.table("events").select(
         "id, name, company, product, date_from, date_to, venue, country, logo_url, banner_url, linkedin_url"
-    ).eq("id", event_id).maybe_single().execute()
+    ).eq("id", event_id).limit(1).execute()
     if not ev or not ev.data:
         raise HTTPException(status_code=404, detail="Event not found")
+    ev_data = ev.data[0]
 
     cats = db.table("event_categories").select("category").eq("event_id", event_id).execute()
     categories = [c["category"] for c in (cats.data or [])]
 
-    icp = db.table("event_icp").select("roles, company_sizes, visit_reasons").eq("event_id", event_id).maybe_single().execute()
-    intent = db.table("event_intent").select("intent_why, intent_buyers").eq("event_id", event_id).maybe_single().execute()
+    icp = db.table("event_icp").select("roles, company_sizes, visit_reasons").eq("event_id", event_id).limit(1).execute()
+    intent = db.table("event_intent").select("intent_why, intent_buyers").eq("event_id", event_id).limit(1).execute()
 
     return {
-        **ev.data,
+        **ev_data,
         "categories": categories,
-        "icp_roles":         (icp.data or {}).get("roles") or [],
-        "icp_company_sizes": (icp.data or {}).get("company_sizes") or [],
-        "icp_visit_reasons": (icp.data or {}).get("visit_reasons") or [],
-        "intent_why":        (intent.data or {}).get("intent_why") or "",
-        "intent_buyers":     (intent.data or {}).get("intent_buyers") or "",
+        "icp_roles":         (icp.data[0] if icp.data else {}).get("roles") or [],
+        "icp_company_sizes": (icp.data[0] if icp.data else {}).get("company_sizes") or [],
+        "icp_visit_reasons": (icp.data[0] if icp.data else {}).get("visit_reasons") or [],
+        "intent_why":        (intent.data[0] if intent.data else {}).get("intent_why") or "",
+        "intent_buyers":     (intent.data[0] if intent.data else {}).get("intent_buyers") or "",
     }
 
 
