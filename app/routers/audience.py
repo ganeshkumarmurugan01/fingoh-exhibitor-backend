@@ -830,17 +830,26 @@ def get_registration_info(event_id: str):
     """Public endpoint — returns event + exhibitor info for the registration form."""
     db = get_db()
     ev = db.table("events").select(
-        "id, name, company, product, date_from, date_to, venue, country"
-    ).eq("id", event_id).maybe_single().execute()
+        "id, name, company, product, date_from, date_to, venue, country, logo_url, banner_url, linkedin_url"
+    ).eq("id", event_id).limit(1).execute()
     if not ev or not ev.data:
         raise HTTPException(status_code=404, detail="Event not found")
+    ev_data = ev.data[0]
 
     cats = db.table("event_categories").select("category").eq("event_id", event_id).execute()
     categories = [c["category"] for c in (cats.data or [])]
 
+    icp = db.table("event_icp").select("roles, company_sizes, visit_reasons").eq("event_id", event_id).limit(1).execute()
+    intent = db.table("event_intent").select("intent_why, intent_buyers").eq("event_id", event_id).limit(1).execute()
+
     return {
-        **ev.data,
+        **ev_data,
         "categories": categories,
+        "icp_roles":         (icp.data[0] if icp.data else {}).get("roles") or [],
+        "icp_company_sizes": (icp.data[0] if icp.data else {}).get("company_sizes") or [],
+        "icp_visit_reasons": (icp.data[0] if icp.data else {}).get("visit_reasons") or [],
+        "intent_why":        (intent.data[0] if intent.data else {}).get("intent_why") or "",
+        "intent_buyers":     (intent.data[0] if intent.data else {}).get("intent_buyers") or "",
     }
 
 
@@ -1012,24 +1021,10 @@ async def upload_audience(
     # Fetch exhibitor context for this event
     event_ctx = _get_event_context(supabase, event_id)
 
-    # Enrich each visitor with Claude (parallel, max 5 concurrent)
-    enriched_rows = []
-    if ANTHROPIC_API_KEY:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            sem = asyncio.Semaphore(8)
-            async def enrich_one(row):
-                async with sem:
-                    try:
-                        signals = await _enrich_visitor(row, event_ctx, client)
-                    except Exception:
-                        signals = {}
-                    return {**row, **signals}
-            enriched_rows = await asyncio.gather(*[enrich_one(r) for r in rows])
-    else:
-        enriched_rows = rows
-
-    # Score with XGBoost via Modal
-    scored = await _score_batch(enriched_rows, event_ctx.get("industry_vertical", "general"))
+    # ── PHASE 1: Save all rows immediately (unenriched) ──────────────────────
+    # Score with basic XGBoost only (no Claude enrichment) so we can return fast
+    scored = await _score_batch(rows, event_ctx.get("industry_vertical", "general"))
+    enriched_rows = rows  # raw rows, no Claude enrichment yet
 
     # ── Apply historical boost from previous edition ───────────────────────
     # Fetch previous_event_id for this event
@@ -1061,6 +1056,7 @@ async def upload_audience(
             "reg_prob":    s["regProb"],
             "scored_at":   "now()",
             "meeting_interest": _parse_meeting_interest(_get(r, "meeting_interest")),
+            "enrichment_status": "pending",
         }
         for r, s in zip(enriched_rows, scored)
     ]
@@ -1068,6 +1064,76 @@ async def upload_audience(
     supabase.table("audience_contacts").upsert(
         records, on_conflict="event_id,email"
     ).execute()
+
+    # ── PHASE 2: Trigger background enrichment in batches of 50 ─────────────
+    async def enrich_in_background(event_id: str, org_id: str):
+        BATCH = 50
+        try:
+            ctx = _get_event_context(supabase, event_id)
+            # Check kill switch before each batch
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                offset = 0
+                while True:
+                    # Check if enrichment is paused for this event
+                    ev_check = supabase.table("events").select("enrichment_paused").eq("id", event_id).maybe_single().execute()
+                    if ev_check and ev_check.data and ev_check.data.get("enrichment_paused"):
+                        logger.info("Enrichment paused for event %s — stopping", event_id)
+                        break
+
+                    # Fetch next batch of pending contacts
+                    batch_res = supabase.table("audience_contacts")                         .select("*")                         .eq("event_id", event_id)                         .eq("enrichment_status", "pending")                         .limit(BATCH)                         .execute()
+
+                    batch = batch_res.data or []
+                    if not batch:
+                        logger.info("Enrichment complete for event %s", event_id)
+                        break
+
+                    # Mark as enriching
+                    ids = [c["id"] for c in batch]
+                    supabase.table("audience_contacts").update({"enrichment_status": "enriching"}).in_("id", ids).execute()
+
+                    # Enrich with Claude
+                    sem = asyncio.Semaphore(5)
+                    async def enrich_one(contact):
+                        async with sem:
+                            try:
+                                row = contact.get("raw_data") or contact
+                                signals = await _enrich_visitor(row, ctx, client)
+                                # Merge signals into raw_data
+                                merged_raw = {**(contact.get("raw_data") or {}), **signals}
+                                # Rescore with enriched signals
+                                score_row = {
+                                    "id": contact["id"],
+                                    "job_title": contact.get("designation") or "",
+                                    "icp_fit_score": compute_icp_fit(contact.get("designation") or "", contact.get("company_size") or "", ctx),
+                                    **{k: float(signals.get(k, 0) or 0) for k in [
+                                        "buying_cycle_stage", "trigger_event_score",
+                                        "meeting_requests_sent", "previous_event_history",
+                                        "categories_specificity", "profile_completeness"
+                                    ]},
+                                }
+                                new_scores = await _score_batch([score_row], ctx.get("industry_vertical", "general"))
+                                new_iei = round(float(new_scores[0].get("ieiScore", contact.get("iei_score", 43))), 2) if new_scores else contact.get("iei_score", 43)
+                                new_reg = round(float(new_scores[0].get("regProb", contact.get("reg_prob", 0.43))), 4) if new_scores else contact.get("reg_prob", 0.43)
+                                supabase.table("audience_contacts").update({
+                                    "raw_data": merged_raw,
+                                    "iei_score": new_iei,
+                                    "reg_prob": new_reg,
+                                    "enrichment_status": "done",
+                                }).eq("id", contact["id"]).execute()
+                            except Exception as e:
+                                logger.warning("Enrichment failed for contact %s: %s", contact.get("id"), e)
+                                supabase.table("audience_contacts").update({"enrichment_status": "failed"}).eq("id", contact["id"]).execute()
+
+                    await asyncio.gather(*[enrich_one(c) for c in batch])
+                    logger.info("Enriched batch of %d for event %s", len(batch), event_id)
+                    await asyncio.sleep(1)  # Brief pause between batches
+
+        except Exception as e:
+            logger.error("Background enrichment crashed for event %s: %s", event_id, e)
+
+    # Fire and forget — does not block the response
+    asyncio.create_task(enrich_in_background(event_id, org_id))
 
     log_activity(get_db(), get_user_org(current_user["user_id"], get_db()), "contacts_uploaded", f"Uploaded {len(records)} contacts", current_user["user_id"], {"count": len(records), "event_id": event_id})
     return {
@@ -1078,6 +1144,7 @@ async def upload_audience(
         "plan_limit":  max_contacts,
         "used_after":  existing_count + len(records),
         "truncated":   len(rows) < (existing_count + len(records)),
+        "enrichment":  "queued",
     }
 
 
@@ -2071,3 +2138,48 @@ async def save_walk_in(payload: WalkInSaveRequest):
     }).execute()
 
     return {"ok": True, "contact_id": contact_id, "created": not bool(existing)}
+
+# force-redeploy: logo_url banner_url icp intent
+
+
+# ── Enrichment kill switch ────────────────────────────────────────────────────
+@router.post("/enrich/pause/{event_id}")
+async def pause_enrichment(event_id: str, current_user: dict = Depends(get_current_user)):
+    """Pause background enrichment for an event."""
+    db = get_db()
+    org_id = get_user_org(current_user["user_id"], db)
+    ev = db.table("events").select("org_id").eq("id", event_id).eq("org_id", org_id).maybe_single().execute()
+    if not ev or not ev.data:
+        raise HTTPException(403, "Not authorised")
+    db.table("events").update({"enrichment_paused": True}).eq("id", event_id).execute()
+    return {"paused": True}
+
+@router.post("/enrich/resume/{event_id}")
+async def resume_enrichment(event_id: str, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
+    """Resume background enrichment for an event."""
+    db = get_db()
+    org_id = get_user_org(current_user["user_id"], db)
+    ev = db.table("events").select("org_id").eq("id", event_id).eq("org_id", org_id).maybe_single().execute()
+    if not ev or not ev.data:
+        raise HTTPException(403, "Not authorised")
+    db.table("events").update({"enrichment_paused": False}).eq("id", event_id).execute()
+    return {"resumed": True}
+
+@router.get("/enrich/status/{event_id}")
+async def enrichment_status(event_id: str, current_user: dict = Depends(get_current_user)):
+    """Get enrichment progress for an event."""
+    db = get_db()
+    total = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).execute()
+    done = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "done").execute()
+    pending = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "pending").execute()
+    enriching = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "enriching").execute()
+    failed = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "failed").execute()
+    ev = db.table("events").select("enrichment_paused").eq("id", event_id).maybe_single().execute()
+    return {
+        "total":      total.count or 0,
+        "done":       done.count or 0,
+        "pending":    pending.count or 0,
+        "enriching":  enriching.count or 0,
+        "failed":     failed.count or 0,
+        "paused":     (ev.data or {}).get("enrichment_paused", False),
+    }
