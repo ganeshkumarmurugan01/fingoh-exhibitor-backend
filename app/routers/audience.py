@@ -1068,27 +1068,12 @@ async def upload_audience(
         rows = rows[:remaining]
         logger.warning("Upload truncated to %d rows (plan limit %d, existing %d)", remaining, max_contacts, existing_count)
 
-    # Fetch exhibitor context for this event
+    # Fetch exhibitor context for this event (needed for background enrichment)
     event_ctx = _get_event_context(supabase, event_id)
 
-    # Enrich each visitor with Claude (parallel, max 5 concurrent)
-    enriched_rows = []
-    if ANTHROPIC_API_KEY:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            sem = asyncio.Semaphore(8)
-            async def enrich_one(row):
-                async with sem:
-                    try:
-                        signals = await _enrich_visitor(row, event_ctx, client)
-                    except Exception:
-                        signals = {}
-                    return {**row, **signals}
-            enriched_rows = await asyncio.gather(*[enrich_one(r) for r in rows])
-    else:
-        enriched_rows = rows
-
-    # Score with XGBoost via Modal
-    scored = await _score_batch(enriched_rows, event_ctx.get("industry_vertical", "general"))
+    # Save immediately with default scores — background task handles scoring+enrichment
+    enriched_rows = rows
+    scored = [{"ieiScore": 43.0, "regProb": 0.43} for _ in rows]
 
     # ── Apply historical boost from previous edition ───────────────────────
     # Fetch previous_event_id for this event
