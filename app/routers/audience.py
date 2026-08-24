@@ -334,6 +334,50 @@ PHARMA-SPECIFIC SIGNALS (output these additional fields for pharma events):
         return {}
 
 
+
+# ── Junk contact filter — skip enrichment for non-buyers ─────────────────────
+JUNK_DESIGNATIONS = {
+    "student", "intern", "fresher", "trainee", "graduate", "undergraduate",
+    "mba student", "btech", "phd scholar", "phd student", "research scholar",
+    "b.pharm", "m.pharm", "b.tech", "m.tech"
+}
+PERSONAL_EMAIL_DOMAINS = {
+    "gmail.com", "yahoo.com", "yahoo.in", "hotmail.com", "outlook.com",
+    "rediffmail.com", "ymail.com", "live.com", "icloud.com"
+}
+JUNK_COMPANY_KEYWORDS = {
+    "university", "college", "school", "institute of technology",
+    "iit ", "nit ", "bits ", "engineering college"
+}
+
+def _is_junk_contact(row: dict) -> tuple[bool, str]:
+    """Returns (is_junk, reason). Junk contacts skip Claude enrichment."""
+    designation = (row.get("designation") or row.get("job_title") or "").lower().strip()
+    company = (row.get("company") or "").lower().strip()
+    email = (row.get("email") or "").lower().strip()
+
+    # Missing company
+    if not company or company in ("-", "n/a", "na", "none", "nil"):
+        return True, "missing_company"
+
+    # Student / intern designation
+    for junk in JUNK_DESIGNATIONS:
+        if junk in designation:
+            return True, f"junk_designation:{designation}"
+
+    # Personal email domain
+    if "@" in email:
+        domain = email.split("@")[-1]
+        if domain in PERSONAL_EMAIL_DOMAINS:
+            return True, f"personal_email:{domain}"
+
+    # Non-pharma institution company
+    for kw in JUNK_COMPANY_KEYWORDS:
+        if kw in company:
+            return True, f"junk_company:{company[:30]}"
+
+    return False, ""
+
 # ── Score batch via Modal XGBoost ─────────────────────────────────────────────
 async def _score_batch(rows: list[dict], industry_vertical: str = "general") -> list[dict]:
     url = MODAL_SCORER_URLS.get(industry_vertical) or MODAL_SCORER_URL
@@ -1070,6 +1114,7 @@ async def upload_audience(
             "reg_prob":    s["regProb"],
             "scored_at":   "now()",
             "meeting_interest": _parse_meeting_interest(_get(r, "meeting_interest")),
+            "enrichment_status": "pending",
         }
         for r, s in zip(enriched_rows, scored)
     ]
@@ -1077,6 +1122,79 @@ async def upload_audience(
     supabase.table("audience_contacts").upsert(
         records, on_conflict="event_id,email"
     ).execute()
+
+    # ── Background enrichment in batches of 50 ───────────────────────────────
+    async def enrich_in_background():
+        BATCH = 50
+        try:
+            ctx = _get_event_context(supabase, event_id)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                while True:
+                    # Kill switch check
+                    ev_check = supabase.table("events").select("enrichment_paused").eq("id", event_id).maybe_single().execute()
+                    if ev_check and ev_check.data and ev_check.data.get("enrichment_paused"):
+                        logger.info("Enrichment paused for event %s", event_id)
+                        break
+
+                    # Fetch next pending batch
+                    batch_res = supabase.table("audience_contacts")                         .select("*")                         .eq("event_id", event_id)                         .eq("enrichment_status", "pending")                         .limit(BATCH)                         .execute()
+                    batch = batch_res.data or []
+                    if not batch:
+                        logger.info("Enrichment complete for event %s", event_id)
+                        break
+
+                    # Mark batch as enriching
+                    ids = [c["id"] for c in batch]
+                    supabase.table("audience_contacts").update({"enrichment_status": "enriching"}).in_("id", ids).execute()
+
+                    sem = asyncio.Semaphore(5)
+                    async def enrich_one(contact):
+                        async with sem:
+                            try:
+                                row = contact.get("raw_data") or contact
+                                # Junk filter — skip students, personal emails, missing company
+                                is_junk, junk_reason = _is_junk_contact(row)
+                                if is_junk:
+                                    logger.info("Skipping junk contact %s: %s", contact.get("email"), junk_reason)
+                                    supabase.table("audience_contacts").update({
+                                        "enrichment_status": "skipped",
+                                        "raw_data": {**(contact.get("raw_data") or {}), "junk_reason": junk_reason}
+                                    }).eq("id", contact["id"]).execute()
+                                    return
+                                # Claude enrichment
+                                signals = await _enrich_visitor(row, ctx, client)
+                                merged_raw = {**(contact.get("raw_data") or {}), **signals}
+                                # Rescore with enriched signals
+                                score_row = {
+                                    "id": contact["id"],
+                                    "job_title": contact.get("designation") or "",
+                                    "icp_fit_score": compute_icp_fit(contact.get("designation") or "", "", ctx),
+                                    **{k: float(signals.get(k, 0) or 0) for k in [
+                                        "buying_cycle_stage", "trigger_event_score",
+                                        "meeting_requests_sent", "previous_event_history",
+                                        "categories_specificity", "profile_completeness"
+                                    ]},
+                                }
+                                new_scores = await _score_batch([score_row], ctx.get("industry_vertical", "general"))
+                                new_iei = round(float(new_scores[0].get("ieiScore", contact.get("iei_score", 43))), 2) if new_scores else contact.get("iei_score", 43)
+                                new_reg = round(float(new_scores[0].get("regProb", contact.get("reg_prob", 0.43))), 4) if new_scores else contact.get("reg_prob", 0.43)
+                                supabase.table("audience_contacts").update({
+                                    "raw_data": merged_raw,
+                                    "iei_score": new_iei,
+                                    "reg_prob": new_reg,
+                                    "enrichment_status": "done",
+                                }).eq("id", contact["id"]).execute()
+                            except Exception as e:
+                                logger.warning("Enrichment failed for %s: %s", contact.get("email"), e)
+                                supabase.table("audience_contacts").update({"enrichment_status": "failed"}).eq("id", contact["id"]).execute()
+
+                    await asyncio.gather(*[enrich_one(c) for c in batch])
+                    logger.info("Enriched batch of %d for event %s", len(batch), event_id)
+                    await asyncio.sleep(1)
+        except Exception as e:
+            logger.error("Background enrichment crashed for event %s: %s", event_id, e)
+
+    asyncio.create_task(enrich_in_background())
 
     log_activity(get_db(), get_user_org(current_user["user_id"], get_db()), "contacts_uploaded", f"Uploaded {len(records)} contacts", current_user["user_id"], {"count": len(records), "event_id": event_id})
     return {
@@ -1087,6 +1205,7 @@ async def upload_audience(
         "plan_limit":  max_contacts,
         "used_after":  existing_count + len(records),
         "truncated":   len(rows) < (existing_count + len(records)),
+        "enrichment":  "queued",
     }
 
 
