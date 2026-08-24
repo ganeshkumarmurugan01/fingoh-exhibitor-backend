@@ -352,9 +352,11 @@ JUNK_COMPANY_KEYWORDS = {
 
 def _is_junk_contact(row: dict) -> tuple[bool, str]:
     """Returns (is_junk, reason). Junk contacts skip Claude enrichment."""
-    designation = (row.get("designation") or row.get("job_title") or "").lower().strip()
-    company = (row.get("company") or "").lower().strip()
-    email = (row.get("email") or "").lower().strip()
+    # Check both lowercase and title case keys (CSV vs DB row)
+    designation = (row.get("designation") or row.get("Designation") or
+                   row.get("job_title") or row.get("Job Title") or "").lower().strip()
+    company = (row.get("company") or row.get("Company") or "").lower().strip()
+    email = (row.get("email") or row.get("Email") or "").lower().strip()
 
     # Missing company
     if not company or company in ("-", "n/a", "na", "none", "nil"):
@@ -1142,7 +1144,14 @@ async def upload_audience(
                     async def enrich_one(contact):
                         async with sem:
                             try:
-                                row = contact.get("raw_data") or contact
+                                raw = contact.get("raw_data") or {}
+                                # Merge DB fields into raw so junk filter has fallback
+                                row = {
+                                    "company": contact.get("company") or raw.get("company") or raw.get("Company") or "",
+                                    "designation": contact.get("designation") or raw.get("designation") or raw.get("Designation") or raw.get("job_title") or "",
+                                    "email": contact.get("email") or raw.get("email") or raw.get("Email") or "",
+                                    **raw,
+                                }
                                 # Junk filter — skip students, personal emails, missing company
                                 is_junk, junk_reason = _is_junk_contact(row)
                                 if is_junk:
