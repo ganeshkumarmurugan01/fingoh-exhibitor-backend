@@ -1131,6 +1131,19 @@ async def upload_audience(
         for r, s in zip(enriched_rows, scored)
     ]
 
+    # Check which emails already exist and are enriched — don't reset their status
+    emails = [r.get("email","") for r in records if r.get("email")]
+    existing_res = supabase.table("audience_contacts")         .select("email, enrichment_status")         .eq("event_id", event_id)         .in_("email", emails)         .execute()
+    already_enriched = {
+        r["email"] for r in (existing_res.data or [])
+        if r.get("enrichment_status") in ("done", "skipped")
+    }
+
+    # For already-enriched contacts, don't reset enrichment_status
+    for rec in records:
+        if rec.get("email") in already_enriched:
+            rec["enrichment_status"] = "done"  # keep as done, won't re-enrich
+
     supabase.table("audience_contacts").upsert(
         records, on_conflict="event_id,email"
     ).execute()
