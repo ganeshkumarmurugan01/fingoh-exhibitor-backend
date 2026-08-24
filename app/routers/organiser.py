@@ -1339,3 +1339,117 @@ async def import_organiser_rows(
         "imported": imported,
         "remaining": remaining - imported,
     }
+
+
+# ── Phase 4: Event Intelligence Dashboard ────────────────────────────────────
+@router.get("/organiser/events/{event_id}/intelligence")
+def event_intelligence(
+    event_id: str,
+    current_user: dict = Depends(get_current_organiser_user),
+):
+    """Returns aggregate intelligence stats for an organiser event."""
+    sb = get_supabase()
+    organiser_id = current_user["organiser_id"]
+
+    # Verify ownership
+    event = sb.table("organiser_events").select("*").eq(
+        "id", event_id
+    ).eq("organiser_id", organiser_id).maybe_single().execute()
+    if not event or not event.data:
+        raise HTTPException(404, "Event not found")
+
+    # Get all exhibitor links for this event
+    links = sb.table("organiser_exhibitor_links").select("*").eq(
+        "organiser_event_id", event_id
+    ).neq("status", "removed").execute()
+    links_data = links.data or []
+
+    # Get all Fingoh events linked to this organiser event
+    fingoh_events = sb.table("events").select(
+        "id, company, org_id, booth_size, industry_vertical"
+    ).eq("organiser_event_id", event_id).execute()
+    fingoh_event_map = {e["org_id"]: e for e in (fingoh_events.data or [])}
+
+    exhibitor_stats = []
+    event_totals = {
+        "total_visitors": 0,
+        "total_meetings": 0,
+        "iei_scores": [],
+        "tier_counts": {"T1": 0, "T2": 0, "T3": 0, "T4": 0},
+    }
+
+    for link in links_data:
+        org_id = link.get("org_id")
+        fingoh_ev = fingoh_event_map.get(org_id)
+        fingoh_event_id = fingoh_ev["id"] if fingoh_ev else None
+
+        stat = {
+            "link_id":       link["id"],
+            "invite_email":  link.get("invite_email", ""),
+            "status":        link.get("status", "invited"),
+            "company":       fingoh_ev.get("company", link.get("invite_email", "")) if fingoh_ev else link.get("invite_email", ""),
+            "data_allocation": link.get("data_allocation", 0),
+            "data_consumed":   link.get("data_consumed", 0),
+            "visitor_count":  0,
+            "avg_iei":        None,
+            "tier_counts":    {"T1": 0, "T2": 0, "T3": 0, "T4": 0},
+            "meeting_count":  0,
+            "setup_pct":      None,
+            "last_upload_at": None,
+        }
+
+        if fingoh_event_id:
+            # Visitor stats
+            contacts = sb.table("audience_contacts").select(
+                "iei_score, iei_tier, scored_at"
+            ).eq("event_id", fingoh_event_id).execute()
+            contacts_data = contacts.data or []
+
+            if contacts_data:
+                scores = [c["iei_score"] for c in contacts_data if c.get("iei_score")]
+                stat["visitor_count"] = len(contacts_data)
+                stat["avg_iei"] = round(sum(scores) / len(scores), 1) if scores else None
+                for c in contacts_data:
+                    tier = c.get("iei_tier")
+                    if tier in stat["tier_counts"]:
+                        stat["tier_counts"][tier] += 1
+                        event_totals["tier_counts"][tier] += 1
+                scored_ats = [c["scored_at"] for c in contacts_data if c.get("scored_at")]
+                stat["last_upload_at"] = max(scored_ats) if scored_ats else None
+                event_totals["total_visitors"] += stat["visitor_count"]
+                event_totals["iei_scores"].extend(scores)
+
+            # Meeting stats
+            meetings = sb.table("meeting_requests").select(
+                "id", count="exact"
+            ).eq("event_id", fingoh_event_id).execute()
+            stat["meeting_count"] = meetings.count or 0
+            event_totals["total_meetings"] += stat["meeting_count"]
+
+            # Setup progress from event
+            ev_full = sb.table("events").select(
+                "company, website, linkedin_url, booth_size, industry_vertical"
+            ).eq("id", fingoh_event_id).maybe_single().execute()
+            if ev_full and ev_full.data:
+                d = ev_full.data
+                fields = [d.get("company"), d.get("website"), d.get("linkedin_url"), d.get("booth_size"), d.get("industry_vertical")]
+                filled = sum(1 for f in fields if f and str(f).strip())
+                stat["setup_pct"] = round((filled / len(fields)) * 100)
+
+        exhibitor_stats.append(stat)
+
+    avg_iei_event = round(
+        sum(event_totals["iei_scores"]) / len(event_totals["iei_scores"]), 1
+    ) if event_totals["iei_scores"] else None
+
+    return {
+        "event":    event.data,
+        "summary": {
+            "total_exhibitors": len(links_data),
+            "total_visitors":   event_totals["total_visitors"],
+            "avg_iei":          avg_iei_event,
+            "total_meetings":   event_totals["total_meetings"],
+            "tier_counts":      event_totals["tier_counts"],
+        },
+        "exhibitors": exhibitor_stats,
+    }
