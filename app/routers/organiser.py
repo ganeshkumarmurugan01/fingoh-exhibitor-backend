@@ -1370,9 +1370,15 @@ def event_intelligence(
     ).eq("organiser_event_id", event_id).execute()
     fingoh_event_map = {e["org_id"]: e for e in (fingoh_events.data or [])}
 
+    # Count organiser-uploaded visitor rows for this event
+    org_visitors_res = sb.table("organiser_visitor_rows").select(
+        "id", count="exact"
+    ).eq("organiser_event_id", event_id).execute()
+    org_visitor_count = org_visitors_res.count or 0
+
     exhibitor_stats = []
     event_totals = {
-        "total_visitors": 0,
+        "total_visitors": org_visitor_count,  # start with organiser pool
         "total_meetings": 0,
         "iei_scores": [],
         "tier_counts": {"T1": 0, "T2": 0, "T3": 0, "T4": 0},
@@ -1445,11 +1451,13 @@ def event_intelligence(
     return {
         "event":    event.data,
         "summary": {
-            "total_exhibitors": len(links_data),
-            "total_visitors":   event_totals["total_visitors"],
-            "avg_iei":          avg_iei_event,
-            "total_meetings":   event_totals["total_meetings"],
-            "tier_counts":      event_totals["tier_counts"],
+            "total_exhibitors":       len(links_data),
+            "total_visitors":         event_totals["total_visitors"],
+            "organiser_visitor_pool": org_visitor_count,
+            "exhibitor_visitors":     event_totals["total_visitors"] - org_visitor_count,
+            "avg_iei":                avg_iei_event,
+            "total_meetings":         event_totals["total_meetings"],
+            "tier_counts":            event_totals["tier_counts"],
         },
         "exhibitors": exhibitor_stats,
     }
