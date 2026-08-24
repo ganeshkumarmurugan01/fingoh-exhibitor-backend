@@ -1041,8 +1041,14 @@ async def upload_audience(
             missing.append("email")
         if missing:
             rejected_rows.append({"row": row, "missing": missing})
-        else:
-            valid_rows.append(row)
+            continue
+        # Exclude contacts with personal email AND no company — pure junk
+        is_junk, junk_reason = _is_junk_contact(row)
+        no_company = not company or company.strip() in ("-", "n/a", "na", "none", "nil", "")
+        if is_junk and no_company:
+            rejected_rows.append({"row": row, "missing": [f"junk:{junk_reason}"]})
+            continue
+        valid_rows.append(row)
     rows = valid_rows
 
     # ── Enforce contact cap for this org's plan ──────────────────────────────
