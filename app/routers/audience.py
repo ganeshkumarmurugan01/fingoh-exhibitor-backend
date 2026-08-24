@@ -345,6 +345,21 @@ PERSONAL_EMAIL_DOMAINS = {
     "gmail.com", "yahoo.com", "yahoo.in", "hotmail.com", "outlook.com",
     "rediffmail.com", "ymail.com", "live.com", "icloud.com"
 }
+PHARMA_COMPANY_KEYWORDS = {
+    "pharma", "pharmaceutical", "drug", "biotech", "biotechnology",
+    "laboratory", "laboratories", "labs", "life science", "lifescience",
+    "api", "formulation", "cro", "cmo", "clinical", "medical",
+    "healthcare", "health care", "diagnostics", "diagnostic",
+    "chemicals", "chemical", "nutraceutical", "nutra", "generics",
+    "biologics", "biologic", "biopharma", "medtech", "med tech",
+    "research", "sciences", "science", "therapeutics", "oncology",
+    "vaccine", "packaging", "serialization", "manufacturing"
+}
+
+def _is_pharma_company(company: str) -> bool:
+    """Check if company name suggests pharma/life sciences industry."""
+    company_lower = company.lower()
+    return any(kw in company_lower for kw in PHARMA_COMPANY_KEYWORDS)
 JUNK_COMPANY_KEYWORDS = {
     "university", "college", "school", "institute of technology",
     "iit ", "nit ", "bits ", "engineering college"
@@ -367,11 +382,12 @@ def _is_junk_contact(row: dict) -> tuple[bool, str]:
         if junk in designation:
             return True, f"junk_designation:{designation}"
 
-    # Personal email domain
+    # Personal email domain — skip unless it's a pharma company
     if "@" in email:
         domain = email.split("@")[-1]
         if domain in PERSONAL_EMAIL_DOMAINS:
-            return True, f"personal_email:{domain}"
+            if not _is_pharma_company(company):
+                return True, f"personal_email_non_pharma:{domain}"
 
     # Non-pharma institution company
     for kw in JUNK_COMPANY_KEYWORDS:
@@ -1045,11 +1061,14 @@ async def upload_audience(
             rejected_rows.append({"row": row, "missing": missing})
             continue
         # Exclude contacts with personal email AND no company — pure junk
-        is_junk, junk_reason = _is_junk_contact(row)
         no_company = not company or company.strip() in ("-", "n/a", "na", "none", "nil", "")
-        if is_junk and no_company:
-            rejected_rows.append({"row": row, "missing": [f"junk:{junk_reason}"]})
-            continue
+        if no_company:
+            # Check if personal email with no company
+            email_val = _get(row, "email") or ""
+            domain = email_val.split("@")[-1].lower() if "@" in email_val else ""
+            if domain in PERSONAL_EMAIL_DOMAINS:
+                rejected_rows.append({"row": row, "missing": ["personal_email_no_company"]})
+                continue
         valid_rows.append(row)
     rows = valid_rows
 
@@ -1075,7 +1094,7 @@ async def upload_audience(
 
     # Save immediately with default scores — background task handles scoring+enrichment
     enriched_rows = rows
-    scored = [{"ieiScore": 43.0, "regProb": 0.43} for _ in rows]
+    scored = [{"ieiScore": 0.0, "regProb": 0.0} for _ in rows]
 
     # ── Apply historical boost from previous edition ───────────────────────
     # Fetch previous_event_id for this event
