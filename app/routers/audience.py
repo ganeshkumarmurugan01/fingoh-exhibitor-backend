@@ -2197,3 +2197,45 @@ async def save_walk_in(payload: WalkInSaveRequest):
     return {"ok": True, "contact_id": contact_id, "created": not bool(existing)}
 
 # force-redeploy: logo_url banner_url icp intent
+
+
+# ── Enrichment kill switch + status ──────────────────────────────────────────
+@router.post("/enrich/pause/{event_id}")
+async def pause_enrichment(event_id: str, current_user: dict = Depends(get_current_user)):
+    db = get_db()
+    org_id = get_user_org(current_user["user_id"], db)
+    ev = db.table("events").select("org_id").eq("id", event_id).eq("org_id", org_id).maybe_single().execute()
+    if not ev or not ev.data:
+        raise HTTPException(403, "Not authorised")
+    db.table("events").update({"enrichment_paused": True}).eq("id", event_id).execute()
+    return {"paused": True}
+
+@router.post("/enrich/resume/{event_id}")
+async def resume_enrichment(event_id: str, current_user: dict = Depends(get_current_user)):
+    db = get_db()
+    org_id = get_user_org(current_user["user_id"], db)
+    ev = db.table("events").select("org_id").eq("id", event_id).eq("org_id", org_id).maybe_single().execute()
+    if not ev or not ev.data:
+        raise HTTPException(403, "Not authorised")
+    db.table("events").update({"enrichment_paused": False}).eq("id", event_id).execute()
+    return {"resumed": True}
+
+@router.get("/enrich/status/{event_id}")
+async def enrichment_status(event_id: str, current_user: dict = Depends(get_current_user)):
+    db = get_db()
+    total    = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).execute()
+    done     = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "done").execute()
+    pending  = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "pending").execute()
+    enriching= db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "enriching").execute()
+    failed   = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "failed").execute()
+    skipped  = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "skipped").execute()
+    ev       = db.table("events").select("enrichment_paused").eq("id", event_id).maybe_single().execute()
+    return {
+        "total":     total.count or 0,
+        "done":      done.count or 0,
+        "pending":   pending.count or 0,
+        "enriching": enriching.count or 0,
+        "failed":    failed.count or 0,
+        "skipped":   skipped.count or 0,
+        "paused":    (ev.data or {}).get("enrichment_paused", False),
+    }
