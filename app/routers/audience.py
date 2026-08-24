@@ -2258,3 +2258,52 @@ async def enrichment_status(event_id: str, current_user: dict = Depends(get_curr
         "skipped":   skipped.count or 0,
         "paused":    (ev.data or {}).get("enrichment_paused", False),
     }
+
+
+# ── Force enrich a single contact (bypasses junk filter) ─────────────────────
+@router.post("/enrich-one/{event_id}/{contact_id}")
+async def force_enrich_one(event_id: str, contact_id: str, current_user: dict = Depends(get_current_user)):
+    """Force Claude enrichment + rescore for a single contact, bypassing junk filter."""
+    db = get_db()
+    org_id = get_user_org(current_user["user_id"], db)
+    ev = db.table("events").select("org_id").eq("id", event_id).eq("org_id", org_id).maybe_single().execute()
+    if not ev or not ev.data:
+        raise HTTPException(403, "Not authorised")
+
+    contact = db.table("audience_contacts").select("*").eq("id", contact_id).eq("event_id", event_id).maybe_single().execute()
+    if not contact or not contact.data:
+        raise HTTPException(404, "Contact not found")
+
+    c = contact.data
+    ctx = _get_event_context(db, event_id)
+    row = c.get("raw_data") or {}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            signals = await _enrich_visitor(row, ctx, client)
+        except Exception as e:
+            raise HTTPException(500, f"Enrichment failed: {e}")
+
+    merged_raw = {**row, **signals}
+    score_row = {
+        "id": contact_id,
+        "job_title": c.get("designation") or "",
+        "icp_fit_score": compute_icp_fit(c.get("designation") or "", "", ctx),
+        **{k: float(signals.get(k, 0) or 0) for k in [
+            "buying_cycle_stage", "trigger_event_score",
+            "meeting_requests_sent", "previous_event_history",
+            "categories_specificity", "profile_completeness"
+        ]},
+    }
+    scores = await _score_batch([score_row], ctx.get("industry_vertical", "general"))
+    new_iei = round(float(scores[0].get("ieiScore", 43)), 2) if scores else 43.0
+    new_reg = round(float(scores[0].get("regProb", 0.43)), 4) if scores else 0.43
+
+    db.table("audience_contacts").update({
+        "raw_data": merged_raw,
+        "iei_score": new_iei,
+        "reg_prob": new_reg,
+        "enrichment_status": "done",
+    }).eq("id", contact_id).execute()
+
+    return {"iei_score": new_iei, "reg_prob": new_reg, "contact_id": contact_id}
