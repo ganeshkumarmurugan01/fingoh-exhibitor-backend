@@ -2253,14 +2253,23 @@ async def resume_enrichment(event_id: str, current_user: dict = Depends(get_curr
     return {"resumed": True}
 
 @router.get("/enrich/status/{event_id}")
-async def enrichment_status(event_id: str, current_user: dict = Depends(get_current_user)):
+async def enrichment_status(event_id: str, current_user: dict = Depends(get_current_user), since: str = None):
+    """Get enrichment progress. Pass since=ISO_TIMESTAMP to filter to current upload only."""
     db = get_db()
-    total    = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).execute()
-    done     = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "done").execute()
-    pending  = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "pending").execute()
-    enriching= db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "enriching").execute()
-    failed   = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "failed").execute()
-    skipped  = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id).eq("enrichment_status", "skipped").execute()
+    def q(status=None):
+        base = db.table("audience_contacts").select("id", count="exact").eq("event_id", event_id)
+        if since:
+            base = base.gte("scored_at", since)
+        if status:
+            base = base.eq("enrichment_status", status)
+        return base.execute()
+
+    total    = q()
+    done     = q("done")
+    pending  = q("pending")
+    enriching= q("enriching")
+    failed   = q("failed")
+    skipped  = q("skipped")
     ev       = db.table("events").select("enrichment_paused").eq("id", event_id).maybe_single().execute()
     return {
         "total":     total.count or 0,
