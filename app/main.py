@@ -19,6 +19,7 @@ from app.routers import email_config
 from app.routers import offerings
 from app.routers import organiser
 from app.routers import products
+from app.routers import categories
 
 settings = get_settings()
 
@@ -57,6 +58,7 @@ app.include_router(agent.router, prefix=API_PREFIX)
 app.include_router(email_config.router, prefix=API_PREFIX)
 app.include_router(offerings.router, prefix=API_PREFIX)
 app.include_router(products.router, prefix="/api/v1")
+app.include_router(categories.router, prefix="/api/v1")
 app.include_router(organiser.router, prefix=API_PREFIX)
 
 @app.get("/health", tags=["system"])

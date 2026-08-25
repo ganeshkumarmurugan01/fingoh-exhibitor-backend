@@ -10,6 +10,7 @@ class OfferingCreate(BaseModel):
     type: str
     name: str
     category: Optional[list[str]] = None
+    category_master: Optional[list] = None
     short_description: Optional[str] = None
     key_specifications: Optional[list[str]] = []
     target_industries: Optional[list[str]] = []
@@ -19,6 +20,7 @@ class OfferingUpdate(BaseModel):
     type: Optional[str] = None
     name: Optional[str] = None
     category: Optional[list[str]] = None
+    category_master: Optional[list] = None
     short_description: Optional[str] = None
     key_specifications: Optional[list[str]] = None
     target_industries: Optional[list[str]] = None
