@@ -1334,6 +1334,78 @@ async def import_organiser_rows(
     except Exception as _re:
         print(f"[organiser import] rescore error: {_re}")
 
+    # trigger background enrichment for newly imported contacts
+    try:
+        from app.routers.audience import _get_event_context, _enrich_visitor, _score_batch, _is_junk_contact, compute_icp_fit
+        from app.database import get_db
+        import httpx as _httpx
+
+        async def _enrich_imported():
+            import asyncio as _asyncio
+            _sb = get_db()
+            ctx = _get_event_context(_sb, event_id)
+            # fetch only the newly imported contacts (pending enrichment)
+            pending = _sb.table("audience_contacts").select("*")                 .eq("event_id", event_id)                 .eq("enrichment_status", "pending")                 .execute()
+            contacts = pending.data or []
+            if not contacts:
+                return
+            sem = _asyncio.Semaphore(3)
+            async with _httpx.AsyncClient(timeout=30.0) as client:
+                async def _enrich_one(contact):
+                    async with sem:
+                        try:
+                            raw = contact.get("raw_data") or {}
+                            row = {
+                                "company":     contact.get("company") or raw.get("company") or "",
+                                "designation": contact.get("designation") or raw.get("designation") or "",
+                                "email":       contact.get("email") or "",
+                                **raw,
+                            }
+                            is_junk, junk_reason = _is_junk_contact(row)
+                            if is_junk:
+                                _sb.table("audience_contacts").update({
+                                    "enrichment_status": "skipped",
+                                    "raw_data": {**(contact.get("raw_data") or {}), "junk_reason": junk_reason}
+                                }).eq("id", contact["id"]).execute()
+                                return
+                            _sb.table("audience_contacts").update({"enrichment_status": "enriching"}).eq("id", contact["id"]).execute()
+                            signals = await _enrich_visitor(row, ctx, client)
+                            merged_raw = {**(contact.get("raw_data") or {}), **signals}
+                            score_row = {
+                                "id": contact["id"],
+                                "job_title": contact.get("designation") or "",
+                                "icp_fit_score": compute_icp_fit(contact.get("designation") or "", "", ctx),
+                                **{k: float(signals.get(k, 0) or 0) for k in [
+                                    "buying_cycle_stage", "trigger_event_score",
+                                    "meeting_requests_sent", "previous_event_history",
+                                    "categories_specificity", "profile_completeness",
+                                    "category_match_score",
+                                ]},
+                            }
+                            new_scores = await _score_batch([score_row], ctx.get("industry_vertical", "general"))
+                            new_iei = round(float(new_scores[0].get("ieiScore", 43)), 2) if new_scores else 43.0
+                            new_reg = round(float(new_scores[0].get("regProb", 0.43)), 4) if new_scores else 0.43
+                            _sb.table("audience_contacts").update({
+                                "raw_data":            merged_raw,
+                                "iei_score":           new_iei,
+                                "reg_prob":            new_reg,
+                                "enrichment_status":   "done",
+                                "category_match_score": float(signals.get("category_match_score") or 0.0),
+                                "match_reasoning":     signals.get("match_reasoning") or "",
+                            }).eq("id", contact["id"]).execute()
+                        except Exception as _e:
+                            print(f"[organiser enrich] failed for {contact.get('email')}: {_e}")
+                            _sb.table("audience_contacts").update({"enrichment_status": "failed"}).eq("id", contact["id"]).execute()
+
+                await _asyncio.gather(*[_enrich_one(c) for c in contacts])
+            print(f"[organiser import] enrichment complete for {event_id}")
+
+        import asyncio as _asyncio
+        _asyncio.create_task(_enrich_imported())
+        print(f"[organiser import] enrichment task queued for {event_id}")
+    except Exception as _ee:
+        print(f"[organiser import] enrichment task error: {_ee}")
+
     return {
         "message":  f"Successfully imported {imported} visitors",
         "imported": imported,
