@@ -211,12 +211,16 @@ async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncCli
     if not ANTHROPIC_API_KEY:
         return {}
 
-    name        = visitor.get("name") or f'{visitor.get("first_name","")} {visitor.get("last_name","")}'.strip()
-    title       = visitor.get("job_title") or visitor.get("title") or visitor.get("designation") or ""
-    company     = visitor.get("company") or ""
-    country     = visitor.get("country") or ""
-    reason      = visitor.get("primary_reason") or visitor.get("reason") or ""
-    categories  = visitor.get("categories_interest") or ""
+    name        = (visitor.get("name") or visitor.get("Name") or
+                   f'{visitor.get("first_name","") or visitor.get("First Name","")} {visitor.get("last_name","") or visitor.get("Last Name","")}'.strip())
+    title       = (visitor.get("job_title") or visitor.get("Job Title") or
+                   visitor.get("title") or visitor.get("designation") or visitor.get("Designation") or "")
+    company     = visitor.get("company") or visitor.get("Company") or ""
+    country     = visitor.get("country") or visitor.get("Country") or ""
+    reason      = (visitor.get("primary_reason") or visitor.get("Primary Reason") or
+                   visitor.get("reason") or "")
+    categories  = (visitor.get("categories_interest") or visitor.get("Categories of Interest") or
+                   visitor.get("categories") or "")
 
     ex_company   = event_ctx.get("company") or ""
     ex_product   = event_ctx.get("product") or ""
@@ -251,15 +255,15 @@ async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncCli
     intel_block = get_cached_intel(_sb_for_intel, industry=industry_vertical_for_intel) if industry_vertical_for_intel == "pharma" else ""
 
     # Pharma-specific visitor fields from upload template
-    company_type        = visitor.get("company_type") or ""
-    regulatory_market   = visitor.get("regulatory_market") or ""
-    specific_product    = visitor.get("specific_product_interest") or ""
-    visit_timeline      = visitor.get("visit_timeline") or ""
-    incumbent_vendor    = visitor.get("incumbent_vendor") or ""
-    previous_edition    = visitor.get("previous_edition") or ""
-    export_markets      = visitor.get("export_markets") or ""
-    annual_procurement  = visitor.get("annual_procurement_value") or ""
-    linkedin_url        = visitor.get("linkedin_url") or ""
+    company_type        = visitor.get("company_type") or visitor.get("Company Type") or ""
+    regulatory_market   = visitor.get("regulatory_market") or visitor.get("Regulatory Market") or ""
+    specific_product    = visitor.get("specific_product_interest") or visitor.get("Specific Product Interest") or ""
+    visit_timeline      = visitor.get("visit_timeline") or visitor.get("Visit Timeline") or ""
+    incumbent_vendor    = visitor.get("incumbent_vendor") or visitor.get("Incumbent Vendor") or ""
+    previous_edition    = visitor.get("previous_edition") or visitor.get("Previous Edition") or ""
+    export_markets      = visitor.get("export_markets") or visitor.get("Export Markets") or ""
+    annual_procurement  = visitor.get("annual_procurement_value") or visitor.get("Annual Procurement Value") or ""
+    linkedin_url        = visitor.get("linkedin_url") or visitor.get("LinkedIn URL") or ""
 
     industry_vertical = event_ctx.get("industry_vertical") or "general"
     industry_hint = INDUSTRY_CONTEXT.get(industry_vertical, "")
