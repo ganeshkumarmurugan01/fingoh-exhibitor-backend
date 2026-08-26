@@ -673,6 +673,7 @@ async def rescore_all(
         db.table("audience_contacts").update({
             "icp_fit_score": icp_fit,
             "iei_score":     iei,
+            "iei_tier":      tier,
             }).eq("id", c["id"]).execute()
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
         updated += 1
@@ -1269,9 +1270,16 @@ async def upload_audience(
                                 new_scores = await _score_batch([score_row], ctx.get("industry_vertical", "general"))
                                 new_iei = round(float(new_scores[0].get("ieiScore", contact.get("iei_score", 43))), 2) if new_scores else contact.get("iei_score", 43)
                                 new_reg = round(float(new_scores[0].get("regProb", contact.get("reg_prob", 0.43))), 4) if new_scores else contact.get("reg_prob", 0.43)
+                                # Compute tier using industry-correct thresholds
+                                _industry = ctx.get("industry_vertical", "general")
+                                if _industry == "pharma":
+                                    _tier = "T1" if new_iei >= 62 else "T2" if new_iei >= 44 else "T3" if new_iei >= 34 else "T4"
+                                else:
+                                    _tier = "T1" if new_iei >= 75 else "T2" if new_iei >= 50 else "T3" if new_iei >= 25 else "T4"
                                 supabase.table("audience_contacts").update({
                                     "raw_data": merged_raw,
                                     "iei_score": new_iei,
+                                    "iei_tier": _tier,
                                     "reg_prob": new_reg,
                                     "enrichment_status": "done",
                                     "category_match_score": float(signals.get("category_match_score") or 0.0),
@@ -2375,18 +2383,28 @@ async def force_enrich_one(event_id: str, contact_id: str, current_user: dict = 
         **{k: float(signals.get(k, 0) or 0) for k in [
             "buying_cycle_stage", "trigger_event_score",
             "meeting_requests_sent", "previous_event_history",
-            "categories_specificity", "profile_completeness"
+            "categories_specificity", "profile_completeness",
+            "category_match_score",
         ]},
     }
     scores = await _score_batch([score_row], ctx.get("industry_vertical", "general"))
     new_iei = round(float(scores[0].get("ieiScore", 43)), 2) if scores else 43.0
     new_reg = round(float(scores[0].get("regProb", 0.43)), 4) if scores else 0.43
 
+    # Compute tier using industry-correct thresholds
+    _industry = ctx.get("industry_vertical", "general")
+    if _industry == "pharma":
+        _tier = "T1" if new_iei >= 62 else "T2" if new_iei >= 44 else "T3" if new_iei >= 34 else "T4"
+    else:
+        _tier = "T1" if new_iei >= 75 else "T2" if new_iei >= 50 else "T3" if new_iei >= 25 else "T4"
     db.table("audience_contacts").update({
         "raw_data": merged_raw,
         "iei_score": new_iei,
+        "iei_tier": _tier,
         "reg_prob": new_reg,
         "enrichment_status": "done",
+        "category_match_score": float(signals.get("category_match_score") or 0.0),
+        "match_reasoning": signals.get("match_reasoning") or "",
     }).eq("id", contact_id).execute()
 
-    return {"iei_score": new_iei, "reg_prob": new_reg, "contact_id": contact_id}
+    return {"iei_score": new_iei, "iei_tier": _tier, "reg_prob": new_reg, "contact_id": contact_id}
