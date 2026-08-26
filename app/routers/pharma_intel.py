@@ -26,8 +26,8 @@ RSS_SOURCES = [
     {"name": "PharmaVoice",               "url": "https://pharmavoice.com/feeds/news"},
     {"name": "Pharmaceutical Technology", "url": "https://www.pharmaceutical-technology.com/feed/"},
     {"name": "Economic Times Pharma",     "url": "https://pharma.economictimes.indiatimes.com/rss/topstories"},
-    {"name": "PharmaBiz",                 "url": "https://www.pharmabiz.com/rss.aspx"},
-    {"name": "Reuters Healthcare",        "url": "https://feeds.reuters.com/reuters/healthNews"},
+    {"name": "Pharmafile",                "url": "https://pharmafile.com/feed"},
+    {"name": "STAT News Pharma",          "url": "https://www.statnews.com/category/pharma/feed/"},
 ]
 
 CPHI_SOURCES = [
@@ -38,7 +38,15 @@ CPHI_SOURCES = [
     {"name": "CPhI Event Content",   "url": "https://www.cphi-online.com/event-content/"},
 ]
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Fingoh-Intel-Bot/1.0; +https://fingoh.ai)"}
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+}
 MAX_PER_SOURCE = 5
 FETCH_TIMEOUT  = 15
 
