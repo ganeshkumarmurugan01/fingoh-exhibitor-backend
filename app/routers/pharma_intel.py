@@ -24,19 +24,12 @@ RSS_SOURCES = [
     {"name": "World Pharma News",          "url": "https://www.worldpharmanews.com/?format=feed&type=rss"},
     {"name": "PharmaTimes",               "url": "https://pharmatimes.com/feed"},
     {"name": "PharmaVoice",               "url": "https://pharmavoice.com/feeds/news"},
-    {"name": "Pharmaceutical Technology", "url": "https://www.pharmaceutical-technology.com/feed/"},
     {"name": "Economic Times Pharma",     "url": "https://pharma.economictimes.indiatimes.com/rss/topstories"},
     {"name": "Pharmafile",                "url": "https://pharmafile.com/feed"},
     {"name": "STAT News Pharma",          "url": "https://www.statnews.com/category/pharma/feed/"},
 ]
 
-CPHI_SOURCES = [
-    {"name": "CPhI News & Insights", "url": "https://www.cphi-online.com/news-and-insights/all.html"},
-    {"name": "CPhI Reports",         "url": "https://www.cphi-online.com/reports/"},
-    {"name": "CPhI Webinars",        "url": "https://www.cphi-online.com/webinars/"},
-    {"name": "CPhI Podcasts",        "url": "https://www.cphi-online.com/podcasts/"},
-    {"name": "CPhI Event Content",   "url": "https://www.cphi-online.com/event-content/"},
-]
+CPHI_SOURCES = []  # CPhI blocks Railway IPs with 403
 
 HEADERS = {
     "User-Agent": (
