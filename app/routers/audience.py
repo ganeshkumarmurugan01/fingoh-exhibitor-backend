@@ -5,6 +5,7 @@ import csv, io, httpx, os, json, asyncio
 from app.database import get_db
 from app.auth import get_current_user, get_user_org
 from app.routers.utils import log_activity
+from app.routers.pharma_intel import get_cached_intel
 
 logger = logging.getLogger("fingoh.audience")
 
@@ -35,6 +36,7 @@ def _get_event_context(supabase, event_id: str) -> dict:
         return {}
     cats = supabase.table("event_categories").select("category").eq("event_id", event_id).execute()
     icp  = supabase.table("event_icp").select("*").eq("event_id", event_id).maybe_single().execute()
+    intent = supabase.table("event_intent").select("*").eq("event_id", event_id).maybe_single().execute()
     context = ev.data.copy()
     context["categories"] = [c["category"] for c in (cats.data or [])]
     if icp and icp.data:
@@ -45,6 +47,34 @@ def _get_event_context(supabase, event_id: str) -> dict:
         context["roles"]         = []
         context["company_sizes"] = []
         context["visit_reasons"] = []
+    if intent and intent.data:
+        context["intent_why"]     = intent.data.get("why") or ""
+        context["intent_buyers"]  = intent.data.get("buyers") or ""
+        context["intent_signals"] = intent.data.get("signals") or ""
+    else:
+        context["intent_why"]     = ""
+        context["intent_buyers"]  = ""
+        context["intent_signals"] = ""
+
+    # Fetch exhibitor category_master from offerings (with descriptions)
+    try:
+        offerings_res = supabase.table("event_offerings")             .select("category_master")             .eq("event_id", event_id)             .execute()
+        all_cat_ids = []
+        for row in (offerings_res.data or []):
+            cats_json = row.get("category_master") or []
+            if isinstance(cats_json, list):
+                all_cat_ids.extend([c.get("id") for c in cats_json if c.get("id")])
+        # Deduplicate
+        all_cat_ids = list(dict.fromkeys(all_cat_ids))
+        if all_cat_ids:
+            cats_res = supabase.table("category_master")                 .select("id, name, level, description")                 .in_("id", all_cat_ids)                 .execute()
+            context["exhibitor_categories"] = cats_res.data or []
+        else:
+            context["exhibitor_categories"] = []
+    except Exception as e:
+        logger.warning(f"[enrich] Failed to fetch exhibitor categories: {e}")
+        context["exhibitor_categories"] = []
+
     return context
 
 
@@ -181,12 +211,16 @@ async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncCli
     if not ANTHROPIC_API_KEY:
         return {}
 
-    name        = visitor.get("name") or f'{visitor.get("first_name","")} {visitor.get("last_name","")}'.strip()
-    title       = visitor.get("job_title") or visitor.get("title") or visitor.get("designation") or ""
-    company     = visitor.get("company") or ""
-    country     = visitor.get("country") or ""
-    reason      = visitor.get("primary_reason") or visitor.get("reason") or ""
-    categories  = visitor.get("categories_interest") or ""
+    name        = (visitor.get("name") or visitor.get("Name") or
+                   f'{visitor.get("first_name","") or visitor.get("First Name","")} {visitor.get("last_name","") or visitor.get("Last Name","")}'.strip())
+    title       = (visitor.get("job_title") or visitor.get("Job Title") or
+                   visitor.get("title") or visitor.get("designation") or visitor.get("Designation") or "")
+    company     = visitor.get("company") or visitor.get("Company") or ""
+    country     = visitor.get("country") or visitor.get("Country") or ""
+    reason      = (visitor.get("primary_reason") or visitor.get("Primary Reason") or
+                   visitor.get("reason") or "")
+    categories  = (visitor.get("categories_interest") or visitor.get("Categories of Interest") or
+                   visitor.get("categories") or "")
 
     ex_company   = event_ctx.get("company") or ""
     ex_product   = event_ctx.get("product") or ""
@@ -202,17 +236,34 @@ async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncCli
     )
     ex_intent    = event_ctx.get("intent_why") or ""
     ex_buyers    = event_ctx.get("intent_buyers") or ""
+    ex_signals   = event_ctx.get("intent_signals") or ""
+
+    # Build exhibitor category block with descriptions for prompt
+    exhibitor_cats = event_ctx.get("exhibitor_categories") or []
+    if exhibitor_cats:
+        cat_lines = []
+        for c in exhibitor_cats:
+            desc = f" — {c['description']}" if c.get("description") else ""
+            cat_lines.append(f"  • {c['name']} (L{c.get('level','?')}){desc}")
+        ex_category_block = "Exhibitor product categories (with descriptions):\n" + "\n".join(cat_lines)
+    else:
+        ex_category_block = ""
+
+    # Get cached pharma intel headlines
+    _sb_for_intel = get_db()
+    industry_vertical_for_intel = event_ctx.get("industry_vertical") or "general"
+    intel_block = get_cached_intel(_sb_for_intel, industry=industry_vertical_for_intel) if industry_vertical_for_intel == "pharma" else ""
 
     # Pharma-specific visitor fields from upload template
-    company_type        = visitor.get("company_type") or ""
-    regulatory_market   = visitor.get("regulatory_market") or ""
-    specific_product    = visitor.get("specific_product_interest") or ""
-    visit_timeline      = visitor.get("visit_timeline") or ""
-    incumbent_vendor    = visitor.get("incumbent_vendor") or ""
-    previous_edition    = visitor.get("previous_edition") or ""
-    export_markets      = visitor.get("export_markets") or ""
-    annual_procurement  = visitor.get("annual_procurement_value") or ""
-    linkedin_url        = visitor.get("linkedin_url") or ""
+    company_type        = visitor.get("company_type") or visitor.get("Company Type") or ""
+    regulatory_market   = visitor.get("regulatory_market") or visitor.get("Regulatory Market") or ""
+    specific_product    = visitor.get("specific_product_interest") or visitor.get("Specific Product Interest") or ""
+    visit_timeline      = visitor.get("visit_timeline") or visitor.get("Visit Timeline") or ""
+    incumbent_vendor    = visitor.get("incumbent_vendor") or visitor.get("Incumbent Vendor") or ""
+    previous_edition    = visitor.get("previous_edition") or visitor.get("Previous Edition") or ""
+    export_markets      = visitor.get("export_markets") or visitor.get("Export Markets") or ""
+    annual_procurement  = visitor.get("annual_procurement_value") or visitor.get("Annual Procurement Value") or ""
+    linkedin_url        = visitor.get("linkedin_url") or visitor.get("LinkedIn URL") or ""
 
     industry_vertical = event_ctx.get("industry_vertical") or "general"
     industry_hint = INDUSTRY_CONTEXT.get(industry_vertical, "")
@@ -237,6 +288,9 @@ EXHIBITOR CONTEXT:
 - Structural ICP fit (pre-computed from role/size match): {structural_icp:.2f}
 - Exhibitor intent: {ex_intent}
 - Ideal buyer profile: {ex_buyers}
+- Exhibitor intent signals: {ex_signals}
+{f"{ex_category_block}" if ex_category_block else ""}
+{f"{intel_block}" if intel_block else ""}
 
 VISITOR TO ANALYSE:
 - Name: {name}
@@ -268,7 +322,9 @@ Respond ONLY with a valid JSON object — no explanation, no markdown:
   "tech_stack_compatibility": 0.0,
   "competitive_displacement": 0.0,
   "profile_completeness": 0.0,
-  "enrichment_notes": "brief reason for scores"{pharma_json_fields}
+  "enrichment_notes": "brief reason for scores",
+  "category_match_score": 0.0,
+  "match_reasoning": "brief explanation of category match"{pharma_json_fields}
 }}
 
 Rules:
@@ -276,7 +332,9 @@ Rules:
 - seniority_score: buying authority (1.0 = CEO/CXO, 0.75 = Director/VP, 0.5 = Manager, 0.3 = Analyst)
 - buying_cycle_stage: evidence of active evaluation (1.0 = active RFP/procurement, 0.5 = researching, 0.1 = awareness)
 - trigger_event_score: recent company signals like funding, expansion, new hire (0-1)
-- Be honest — if you have no data, use 0.3 as neutral, not 0.0{"" if industry_vertical != "pharma" else """
+- Be honest — if you have no data, use 0.3 as neutral, not 0.0
+- category_match_score: semantic match between visitor's full context (role, company, declared interests, visit reason, categories of interest) and the exhibitor's product categories with their descriptions. Do NOT do keyword matching — reason about whether this visitor's business need aligns with what the exhibitor offers. 1.0 = perfect fit (visitor clearly needs exactly what exhibitor offers), 0.7 = strong overlap, 0.5 = partial relevance, 0.3 = weak/indirect connection, 0.1 = no apparent match. Use the category descriptions to understand the exhibitor's actual product scope.
+- match_reasoning: 1-2 sentences explaining WHY you gave this category_match_score — what specifically connects (or doesn't connect) this visitor to the exhibitor's categories{"" if industry_vertical != "pharma" else """
 
 PHARMA-SPECIFIC SIGNALS (output these additional fields for pharma events):
 - country_regulatory_score: assess the visitor's country pharma regulatory environment and how it aligns with the exhibitor's products/certifications. Consider: (1) regulatory framework maturity of visitor's country, (2) cross-border buying patterns between visitor's country and exhibitor's country, (3) known sourcing preferences or restrictions of that country's pharma industry, (4) whether visitor's country exports to markets that require exhibitor's compliance standards. Score 0-1 where 1.0 = perfect regulatory/trade alignment.
@@ -296,7 +354,7 @@ PHARMA-SPECIFIC SIGNALS (output these additional fields for pharma events):
             },
             json={
                 "model": "claude-sonnet-4-6",
-                "max_tokens": 400,
+                "max_tokens": 700,
                 "messages": [{"role": "user", "content": prompt}],
             },
             timeout=25,
@@ -322,7 +380,7 @@ PHARMA-SPECIFIC SIGNALS (output these additional fields for pharma events):
                     pass
             # Last resort: extract numeric fields only
             result = {}
-            base_keys = ["seniority_score","icp_fit_score","company_size_match","categories_specificity","buying_cycle_stage","trigger_event_score","tech_stack_compatibility","competitive_displacement","profile_completeness"]
+            base_keys = ["seniority_score","icp_fit_score","company_size_match","categories_specificity","buying_cycle_stage","trigger_event_score","tech_stack_compatibility","competitive_displacement","profile_completeness","category_match_score"]
             pharma_keys = ["country_regulatory_score","procurement_mandate_score","regulatory_compliance_focus","company_type_match","sourcing_specificity_score","repeat_buyer_potential"] if industry_vertical == "pharma" else []
             for key in base_keys + pharma_keys:
                 m = _re.search(rf'"{key}"\s*:\s*([0-9.]+)', text)
@@ -615,6 +673,7 @@ async def rescore_all(
         db.table("audience_contacts").update({
             "icp_fit_score": icp_fit,
             "iei_score":     iei,
+            "iei_tier":      tier,
             }).eq("id", c["id"]).execute()
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
         updated += 1
@@ -1204,17 +1263,27 @@ async def upload_audience(
                                     **{k: float(signals.get(k, 0) or 0) for k in [
                                         "buying_cycle_stage", "trigger_event_score",
                                         "meeting_requests_sent", "previous_event_history",
-                                        "categories_specificity", "profile_completeness"
+                                        "categories_specificity", "profile_completeness",
+                                        "category_match_score",
                                     ]},
                                 }
                                 new_scores = await _score_batch([score_row], ctx.get("industry_vertical", "general"))
                                 new_iei = round(float(new_scores[0].get("ieiScore", contact.get("iei_score", 43))), 2) if new_scores else contact.get("iei_score", 43)
                                 new_reg = round(float(new_scores[0].get("regProb", contact.get("reg_prob", 0.43))), 4) if new_scores else contact.get("reg_prob", 0.43)
+                                # Compute tier using industry-correct thresholds
+                                _industry = ctx.get("industry_vertical", "general")
+                                if _industry == "pharma":
+                                    _tier = "T1" if new_iei >= 62 else "T2" if new_iei >= 44 else "T3" if new_iei >= 34 else "T4"
+                                else:
+                                    _tier = "T1" if new_iei >= 75 else "T2" if new_iei >= 50 else "T3" if new_iei >= 25 else "T4"
                                 supabase.table("audience_contacts").update({
                                     "raw_data": merged_raw,
                                     "iei_score": new_iei,
+                                    "iei_tier": _tier,
                                     "reg_prob": new_reg,
                                     "enrichment_status": "done",
+                                    "category_match_score": float(signals.get("category_match_score") or 0.0),
+                                    "match_reasoning": signals.get("match_reasoning") or "",
                                 }).eq("id", contact["id"]).execute()
                             except Exception as e:
                                 logger.warning("Enrichment failed for %s: %s", contact.get("email"), e)
@@ -2314,18 +2383,28 @@ async def force_enrich_one(event_id: str, contact_id: str, current_user: dict = 
         **{k: float(signals.get(k, 0) or 0) for k in [
             "buying_cycle_stage", "trigger_event_score",
             "meeting_requests_sent", "previous_event_history",
-            "categories_specificity", "profile_completeness"
+            "categories_specificity", "profile_completeness",
+            "category_match_score",
         ]},
     }
     scores = await _score_batch([score_row], ctx.get("industry_vertical", "general"))
     new_iei = round(float(scores[0].get("ieiScore", 43)), 2) if scores else 43.0
     new_reg = round(float(scores[0].get("regProb", 0.43)), 4) if scores else 0.43
 
+    # Compute tier using industry-correct thresholds
+    _industry = ctx.get("industry_vertical", "general")
+    if _industry == "pharma":
+        _tier = "T1" if new_iei >= 62 else "T2" if new_iei >= 44 else "T3" if new_iei >= 34 else "T4"
+    else:
+        _tier = "T1" if new_iei >= 75 else "T2" if new_iei >= 50 else "T3" if new_iei >= 25 else "T4"
     db.table("audience_contacts").update({
         "raw_data": merged_raw,
         "iei_score": new_iei,
+        "iei_tier": _tier,
         "reg_prob": new_reg,
         "enrichment_status": "done",
+        "category_match_score": float(signals.get("category_match_score") or 0.0),
+        "match_reasoning": signals.get("match_reasoning") or "",
     }).eq("id", contact_id).execute()
 
-    return {"iei_score": new_iei, "reg_prob": new_reg, "contact_id": contact_id}
+    return {"iei_score": new_iei, "iei_tier": _tier, "reg_prob": new_reg, "contact_id": contact_id}
