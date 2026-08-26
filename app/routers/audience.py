@@ -673,7 +673,6 @@ async def rescore_all(
         db.table("audience_contacts").update({
             "icp_fit_score": icp_fit,
             "iei_score":     iei,
-            "iei_tier":      tier,
             }).eq("id", c["id"]).execute()
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
         updated += 1
@@ -1279,7 +1278,6 @@ async def upload_audience(
                                 supabase.table("audience_contacts").update({
                                     "raw_data": merged_raw,
                                     "iei_score": new_iei,
-                                    "iei_tier": _tier,
                                     "reg_prob": new_reg,
                                     "enrichment_status": "done",
                                     "category_match_score": float(signals.get("category_match_score") or 0.0),
@@ -2400,7 +2398,6 @@ async def force_enrich_one(event_id: str, contact_id: str, current_user: dict = 
     db.table("audience_contacts").update({
         "raw_data": merged_raw,
         "iei_score": new_iei,
-        "iei_tier": _tier,
         "reg_prob": new_reg,
         "enrichment_status": "done",
         "category_match_score": float(signals.get("category_match_score") or 0.0),
