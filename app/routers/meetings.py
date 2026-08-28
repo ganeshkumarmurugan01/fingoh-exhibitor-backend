@@ -430,9 +430,14 @@ async def get_meeting_prospects(
         else:
             base_intent = 0.30
 
-        # Boost from meeting_interest
+        # Enrichment status — unenriched contacts get reduced boosts
+        enrichment_status = c.get("enrichment_status", "pending")
+        is_enriched = enrichment_status == "done"
+
+        # Boost from meeting_interest — reduced for unenriched contacts
+        mi_boost = 0.25 if is_enriched else 0.12
         if meeting_interest == "yes":
-            base_intent = min(base_intent + 0.25, 1.0)
+            base_intent = min(base_intent + mi_boost, 1.0)
         elif meeting_interest == "no":
             base_intent = max(base_intent - 0.30, 0.0)
 
@@ -508,8 +513,14 @@ async def get_meeting_prospects(
         TIER_SCORE = {"T1": 1.0, "T2": 0.75, "T3": 0.40, "T4": 0.15}
         tier_correlation = TIER_SCORE.get(iei_tier, 0.30)
 
+        # Penalise unenriched contacts — IEI score unvalidated by Claude
+        if not is_enriched:
+            tier_correlation *= 0.5  # halve tier weight for unenriched
+
         # Hard cap: T4 visitors can never score above 35 overall
         t4_cap = iei_tier == "T4"
+        # Additional cap for skipped/failed contacts — max 55
+        unenriched_cap = enrichment_status in ("skipped", "failed")
 
         # ── Dimension 4: Timing Alignment (12%) ──────────────────────────────
         # Visitor buying timeline vs exhibitor's sales readiness
@@ -563,6 +574,10 @@ async def get_meeting_prospects(
         # Hard cap for T4 visitors
         if t4_cap:
             raw_score = min(raw_score, 0.35)
+
+        # Cap for unenriched contacts (skipped/failed enrichment)
+        if unenriched_cap:
+            raw_score = min(raw_score, 0.55)
 
         match_score = round(min(raw_score * 100, 100), 1)
 
