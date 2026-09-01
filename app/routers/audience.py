@@ -2405,3 +2405,93 @@ async def force_enrich_one(event_id: str, contact_id: str, current_user: dict = 
     }).eq("id", contact_id).execute()
 
     return {"iei_score": new_iei, "iei_tier": _tier, "reg_prob": new_reg, "contact_id": contact_id}
+
+
+# ── Voice transcription endpoint ──────────────────────────────────────────────
+@router.post("/transcribe-voice")
+async def transcribe_voice(payload: dict):
+    """
+    Transcribe voice recording from Staff App.
+    Accepts base64 audio, uses Claude to transcribe + summarise.
+    No auth required — scoped by event_id + contact_id.
+    """
+    import anthropic, base64, os
+
+    audio_b64   = payload.get("audio_base64", "")
+    mime_type   = payload.get("mime_type", "audio/webm")
+    event_id    = payload.get("event_id", "")
+    contact_id  = payload.get("contact_id")
+    contact_name= payload.get("contact_name", "visitor")
+
+    if not audio_b64:
+        raise HTTPException(status_code=400, detail="No audio provided")
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="API key not configured")
+
+    try:
+        # Decode audio
+        audio_bytes = base64.b64decode(audio_b64)
+
+        client = anthropic.Anthropic(api_key=api_key)
+
+        # Use Claude to transcribe the audio
+        message = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=1000,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"""You are transcribing a booth staff voice note from a trade fair.
+The staff member recorded a quick summary of their conversation with {contact_name}.
+
+Please:
+1. Transcribe the audio accurately
+2. Clean up any filler words (um, uh, etc.)
+3. Return ONLY the transcribed text, no preamble or explanation
+
+If the audio is unclear or empty, return: "Audio unclear - please re-record"
+"""
+                        },
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": mime_type,
+                                "data": audio_b64,
+                            }
+                        }
+                    ]
+                }
+            ]
+        )
+
+        transcript = message.content[0].text.strip() if message.content else ""
+
+        # Log to conversation_signals if contact_id provided
+        if contact_id and transcript and "unclear" not in transcript.lower():
+            try:
+                db = get_db()
+                db.table("conversation_signals").insert({
+                    "contact_id":       contact_id,
+                    "event_id":         event_id,
+                    "voice_transcript": transcript,
+                    "logged_by":        "staff_voice",
+                    "notes":            f"[Voice note] {transcript}",
+                }).execute()
+            except Exception as e:
+                logger.warning(f"[transcribe_voice] signal save error: {e}")
+
+        return {"transcript": transcript, "contact_id": contact_id}
+
+    except anthropic.BadRequestError as e:
+        # Audio format not supported by Claude
+        logger.warning(f"[transcribe_voice] Claude rejected audio: {e}")
+        raise HTTPException(status_code=422, detail="Audio format not supported. Please try again.")
+    except Exception as e:
+        logger.error(f"[transcribe_voice] error: {e}")
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
