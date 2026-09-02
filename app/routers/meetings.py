@@ -358,140 +358,264 @@ async def get_meeting_prospects(
             requested[cid] = m["status"]
             meeting_details[cid] = m
 
-    # Score contacts using IEI-based features
-    def derive_features(c):
-        """Derive IEI-based match features from available contact data."""
-        raw = c.get("raw_data") or {}
-        title = (c.get("designation") or "").lower()
-        reason = (c.get("primary_reason") or "").lower()
-        cats = c.get("categories_interest") or ""
-        company_size = (c.get("company_size") or "").lower()
+    # ── Fetch exhibitor context for bilateral scoring ────────────────────────
+    icp_res    = db.table("event_icp").select("*").eq("event_id", event_id).maybe_single().execute()
+    intent_res = db.table("event_intent").select("*").eq("event_id", event_id).maybe_single().execute()
+    ex_icp    = icp_res.data if icp_res and icp_res.data else {}
+    ex_intent = intent_res.data if intent_res and intent_res.data else {}
 
-        # Seniority from job title
-        if any(x in title for x in ["ceo","cto","cfo","chief","president","md","managing director"]):
-            seniority = 1.0
-        elif any(x in title for x in ["vp","vice","svp","director","head"]):
-            seniority = 0.85
-        elif any(x in title for x in ["manager","senior","lead","principal"]):
-            seniority = 0.6
-        elif any(x in title for x in ["engineer","analyst","executive","specialist"]):
-            seniority = 0.35
+    ex_roles        = [r.lower() for r in (ex_icp.get("roles") or [])]
+    ex_sizes        = [s.lower() for s in (ex_icp.get("company_sizes") or [])]
+    ex_visit_reasons= [r.lower() for r in (ex_icp.get("visit_reasons") or [])]
+    ex_intent_why   = (ex_intent.get("why") or "").lower()
+    ex_intent_buyers= (ex_intent.get("buyers") or "").lower()
+
+    def _compute_match_score(c: dict) -> tuple[float, float]:
+        """
+        Compute bilateral match score using 5 dimensions from Fingoh Match architecture.
+        Returns (match_score 0-100, meeting_prob 0-1)
+        """
+        raw   = c.get("raw_data") or {}
+        title = (c.get("designation") or raw.get("designation") or raw.get("Designation") or "").lower()
+        reason_raw = (c.get("primary_reason") or raw.get("primary_reason") or raw.get("Primary Reason") or "").lower()
+        # Handle pipe-separated reasons
+        reason = reason_raw.replace("|", " ").lower()
+        cats_raw = (c.get("categories_interest") or raw.get("categories_interest") or raw.get("Categories of Interest") or "").lower()
+        company_size = (c.get("company_size") or raw.get("company_size") or raw.get("Company Size") or "").lower()
+        company = (c.get("company") or raw.get("company") or raw.get("Company") or "").lower()
+        timeline_raw = (raw.get("visit_timeline") or raw.get("Visit Timeline") or raw.get("purchase_timeline") or "").lower()
+        company_type = (raw.get("company_type") or raw.get("Company Type") or "").lower()
+
+        # meeting_interest — handle string "yes"/"no" and boolean
+        mi_raw = raw.get("meeting_interest") or raw.get("Meeting Interest") or c.get("meeting_interest")
+        if mi_raw in (True, "yes", "Yes", "YES", "y", 1):
+            meeting_interest = "yes"
+        elif mi_raw in (False, "no", "No", "NO", "n", 0):
+            meeting_interest = "no"
         else:
-            seniority = 0.3
+            meeting_interest = "unknown"
 
-        # Company size match (larger = more likely to need meetings)
-        if any(x in company_size for x in ["10000","5000"]):
-            size_score = 1.0
-        elif any(x in company_size for x in ["2000","1000"]):
-            size_score = 0.8
-        elif any(x in company_size for x in ["500","200"]):
-            size_score = 0.6
-        elif any(x in company_size for x in ["50","100"]):
-            size_score = 0.4
+        iei       = float(c.get("iei_score") or 0)
+        iei_tier  = (c.get("iei_tier") or "T4")
+        reg_prob  = float(c.get("reg_prob") or 0.5)
+        cat_match = float(raw.get("category_match_score") or c.get("category_match_score") or 0.0)
+        proc_mandate = float(raw.get("procurement_mandate_score") or 0.0)
+        icp_fit   = float(raw.get("icp_fit_score") or c.get("icp_fit_score") or min(iei / 100.0, 1.0))
+        seniority = float(raw.get("seniority_score") or 0.0)
+        if not seniority:
+            if any(x in title for x in ["ceo","cto","cfo","coo","chief","president","md","managing director"]):
+                seniority = 1.0
+            elif any(x in title for x in ["vp","vice president","svp","evp","director","head of"]):
+                seniority = 0.85
+            elif any(x in title for x in ["manager","senior","lead","principal","general manager"]):
+                seniority = 0.60
+            elif any(x in title for x in ["engineer","analyst","executive","specialist","consultant"]):
+                seniority = 0.35
+            else:
+                seniority = 0.30
+
+        # ── Dimension 1: Intent Alignment (35%) ──────────────────────────────
+        # Visitor's commercial intent vs exhibitor's buyer intent goals
+        SOURCING_KEYWORDS = ["sourcing","procurement","vendor","supplier","purchase","buy","rfp","tender","contract","evaluating"]
+        RESEARCH_KEYWORDS = ["research","learn","network","explore","knowledge","benchmark","compare"]
+
+        has_sourcing = any(k in reason for k in SOURCING_KEYWORDS)
+        has_research = any(k in reason for k in RESEARCH_KEYWORDS)
+
+        # Base intent from reason
+        if has_sourcing:
+            base_intent = 0.75
+        elif has_research:
+            base_intent = 0.40
         else:
-            size_score = 0.5
+            base_intent = 0.30
 
-        # Buying intent from visit reason
-        buying_signals = ["sourcing","procurement","vendor","supplier","evaluating","purchase","buy","rfp","tender","contract"]
-        buying_score = 0.8 if any(x in reason for x in buying_signals) else 0.3
+        # Enrichment status — unenriched contacts get reduced boosts
+        enrichment_status = c.get("enrichment_status", "pending")
+        is_enriched = enrichment_status == "done"
 
-        # Category specificity — more categories = more specific interest
-        cat_count = len([c for c in cats.split(",") if c.strip()]) if cats else 0
-        cat_score = min(cat_count / 3.0, 1.0)
+        # Boost from meeting_interest — reduced for unenriched contacts
+        mi_boost = 0.25 if is_enriched else 0.12
+        if meeting_interest == "yes":
+            base_intent = min(base_intent + mi_boost, 1.0)
+        elif meeting_interest == "no":
+            base_intent = max(base_intent - 0.30, 0.0)
 
-        # ICP fit from iei_score (normalized)
-        iei = c.get("iei_score") or 50
-        icp_fit = min(iei / 100.0, 1.0)
+        # Boost from procurement_mandate (Claude-computed)
+        if proc_mandate > 0:
+            base_intent = min(base_intent + proc_mandate * 0.20, 1.0)
 
-        # Profile completeness — how many fields are filled
-        fields = [c.get("designation"), c.get("company"), c.get("country"),
-                  c.get("primary_reason"), c.get("linkedin_url"), c.get("company_size")]
-        completeness = sum(1 for f in fields if f) / len(fields)
+        # Boost from category_match_score (semantic alignment)
+        if cat_match > 0:
+            base_intent = min(base_intent + cat_match * 0.15, 1.0)
 
-        # Reg prob as proxy for attendance commitment
-        reg_prob = c.get("reg_prob") or 0.5
+        # Check alignment with exhibitor's stated intent
+        ex_intent_match = 0.0
+        if ex_intent_why:
+            intent_keywords = ex_intent_why.split()
+            matching = sum(1 for kw in intent_keywords if len(kw) > 4 and kw in reason)
+            ex_intent_match = min(matching / max(len(intent_keywords), 1), 1.0) * 0.15
+        base_intent = min(base_intent + ex_intent_match, 1.0)
 
-        # Meeting interest — direct registration signal (strongest predictor)
-        meeting_interest = c.get("meeting_interest")
-        if meeting_interest is True:
-            meeting_interest_score = 1.0
-        elif meeting_interest is False:
-            meeting_interest_score = 0.0
+        intent_alignment = base_intent
+
+        # ── Dimension 2: ICP Bilateral Fit (25%) ─────────────────────────────
+        # Visitor firmographic vs exhibitor ICP definition
+        role_score = 0.5  # neutral default
+        if ex_roles:
+            ROLE_KW = {
+                "c-suite / ceo / md":       ["ceo","cto","cfo","chief","president","managing director","md"],
+                "vp / director":            ["vp","vice president","director","head of","svp","evp"],
+                "procurement manager":      ["procurement","purchasing","sourcing","supply chain","buyer"],
+                "clinical / technical lead":["clinical","technical","r&d","research","engineer"],
+                "business owner":           ["owner","founder","co-founder","proprietor","entrepreneur"],
+                "consultant / advisor":     ["consultant","advisor","analyst","specialist"],
+                "department head":          ["head","department","division","general manager"],
+            }
+            best = 0.0
+            for ex_role in ex_roles:
+                kws = ROLE_KW.get(ex_role.lower(), [ex_role.lower()])
+                if any(kw in title for kw in kws):
+                    best = 1.0
+                    break
+                # Partial match
+                ex_words = ex_role.lower().split()
+                if any(w in title for w in ex_words if len(w) > 3):
+                    best = max(best, 0.6)
+            role_score = best if best > 0 else 0.2
+
+        size_score = 0.5
+        if ex_sizes and company_size:
+            for ex_size in ex_sizes:
+                es = ex_size.lower()
+                cs = company_size
+                if es in cs or cs in es:
+                    size_score = 1.0; break
+                if "1000+" in es and any(x in cs for x in ["1000","large","enterprise","mnc"]):
+                    size_score = 1.0; break
+                if "501" in es and any(x in cs for x in ["500","501","600","700","800","900"]):
+                    size_score = 0.9; break
+                if "201" in es and any(x in cs for x in ["200","201","250","300","400"]):
+                    size_score = 0.9; break
+                if "51" in es and any(x in cs for x in ["50","51","75","100","150"]):
+                    size_score = 0.9; break
+
+        # Use Claude icp_fit_score if available, otherwise compute from role + size
+        if icp_fit > 0:
+            icp_bilateral_fit = icp_fit * 0.6 + role_score * 0.25 + size_score * 0.15
         else:
-            meeting_interest_score = 0.5  # unknown
+            icp_bilateral_fit = role_score * 0.5 + size_score * 0.3 + seniority * 0.2
 
-        # Boost trigger score significantly if meeting_interest is True
-        trigger = buying_score * reg_prob
-        if meeting_interest is True:
-            trigger = min(trigger + 0.4, 1.0)
-        elif meeting_interest is False:
-            trigger = max(trigger - 0.3, 0.0)
+        icp_bilateral_fit = float(min(icp_bilateral_fit, 1.0))
 
-        return {
-            "job_title":              c.get("designation", ""),
-            "iei_score":              iei,
-            "icp_fit_score":          icp_fit,
-            "buying_cycle_stage":     buying_score if meeting_interest is not True else min(buying_score + 0.3, 1.0),
-            "microsite_visits":       raw.get("microsite_visits", 0),
-            "content_downloads":      raw.get("content_downloads", 0),
-            "email_click_rate":       raw.get("email_click_rate", 0),
-            "meeting_requests_sent":  1.0 if meeting_interest is True else raw.get("meeting_requests_sent", 0),
-            "profile_completeness":   completeness,
-            "categories_specificity": cat_score,
-            "reg_timing_days":        raw.get("reg_timing_days", 45),
-            "trigger_event_score":    trigger,
-            "competitive_displacement": raw.get("competitive_displacement", 0),
-            "previous_event_history": raw.get("previous_event_history", 0),
-            "company_size_match":     size_score,
-            "meeting_interest":       meeting_interest_score,
-        }
+        # ── Dimension 3: Tier Correlation (20%) ──────────────────────────────
+        # T1/T2 → high commercial value; T3/T4 → suppressed
+        TIER_SCORE = {"T1": 1.0, "T2": 0.75, "T3": 0.40, "T4": 0.15}
+        tier_correlation = TIER_SCORE.get(iei_tier, 0.30)
 
-    visitors_payload = [derive_features(c) for c in contacts]
+        # Penalise unenriched contacts — IEI score unvalidated by Claude
+        if not is_enriched:
+            tier_correlation *= 0.5  # halve tier weight for unenriched
 
-    # Call Modal scorer if configured
-    match_scores = {}
-    event_vertical = event.get("industry_vertical") or "general"
-    meeting_scorer_url = MEETING_SCORER_URLS.get(event_vertical) or MEETING_SCORER_URL
-    if meeting_scorer_url:
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(meeting_scorer_url, json={"visitors": visitors_payload})
-                if resp.status_code == 200:
-                    scores = resp.json().get("scores", [])
-                    for i, c in enumerate(contacts):
-                        if i < len(scores):
-                            match_scores[c["id"]] = scores[i]
-        except Exception as e:
-            logger.error("Meeting scorer error: %s", e)
+        # Hard cap: T4 visitors can never score above 35 overall
+        t4_cap = iei_tier == "T4"
+        # Additional cap for skipped/failed contacts — max 55
+        unenriched_cap = enrichment_status in ("skipped", "failed")
+
+        # ── Dimension 4: Timing Alignment (12%) ──────────────────────────────
+        # Visitor buying timeline vs exhibitor's sales readiness
+        if any(x in timeline_raw for x in ["immediate","urgent","asap","now","this month","q1","q2","q3","q4"]):
+            timing_alignment = 1.0
+        elif any(x in timeline_raw for x in ["3 month","three month","quarter","soon"]):
+            timing_alignment = 0.80
+        elif any(x in timeline_raw for x in ["6 month","six month","half year"]):
+            timing_alignment = 0.60
+        elif any(x in timeline_raw for x in ["12 month","one year","annual","next year"]):
+            timing_alignment = 0.40
+        elif any(x in timeline_raw for x in ["no timeline","not sure","exploring","undecided"]):
+            timing_alignment = 0.25
+        else:
+            # Use buying_cycle_stage from Claude if available
+            bcs = float(raw.get("buying_cycle_stage") or 0.0)
+            timing_alignment = bcs if bcs > 0 else 0.45  # neutral if unknown
+
+        # Boost from trigger_event_score
+        trigger = float(raw.get("trigger_event_score") or 0.0)
+        if trigger > 0:
+            timing_alignment = min(timing_alignment + trigger * 0.15, 1.0)
+
+        # ── Dimension 5: Prior Engagement (8%) ───────────────────────────────
+        # Existing signals of relationship/research
+        microsite    = min(float(raw.get("microsite_visits") or 0) / 5.0, 1.0)
+        email_click  = float(raw.get("email_click_rate") or 0.0)
+        content_dl   = min(float(raw.get("content_downloads") or 0) / 3.0, 1.0)
+        prev_hist    = float(raw.get("previous_event_history") or 0.0)
+        repeat_buyer = float(raw.get("repeat_buyer_potential") or 0.0)
+
+        prior_engagement = (
+            microsite    * 0.25 +
+            email_click  * 0.20 +
+            content_dl   * 0.15 +
+            prev_hist    * 0.25 +
+            repeat_buyer * 0.15
+        )
+        # Reg prob boosts prior engagement slightly
+        prior_engagement = min(prior_engagement + reg_prob * 0.10, 1.0)
+
+        # ── Final Match Score ─────────────────────────────────────────────────
+        raw_score = (
+            intent_alignment   * 0.35 +
+            icp_bilateral_fit  * 0.25 +
+            tier_correlation   * 0.20 +
+            timing_alignment   * 0.12 +
+            prior_engagement   * 0.08
+        )
+
+        # Hard cap for T4 visitors
+        if t4_cap:
+            raw_score = min(raw_score, 0.35)
+
+        # Cap for unenriched contacts (skipped/failed enrichment)
+        if unenriched_cap:
+            raw_score = min(raw_score, 0.55)
+
+        match_score = round(min(raw_score * 100, 100), 1)
+
+        # Calibrated meeting_prob — slightly more conservative than raw score
+        meeting_prob = round(min(raw_score * 0.90 + 0.05, 1.0), 4)
+
+        return match_score, meeting_prob
 
     # Build response
     results = []
     for c in contacts:
-        score_data = match_scores.get(c["id"], {"matchScore": round(c.get("iei_score", 50), 1), "meetingProb": round((c.get("iei_score", 50) or 50) / 100, 3)})
+        match_score, meeting_prob = _compute_match_score(c)
         raw = c.get("raw_data") or {}
         results.append({
-            "contact_id":       c["id"],
-            "name":             c.get("name", c.get("email", "Unknown")),
-            "designation":      c.get("designation", "—"),
-            "company":          c.get("company", "—"),
-            "country":          c.get("country", "—"),
-            "email":            c.get("email", ""),
-            "iei_score":        c.get("iei_score", 0),
-            "iei_tier":         c.get("iei_tier", "Cool"),
+            "contact_id":           c["id"],
+            "name":                 c.get("name", c.get("email", "Unknown")),
+            "designation":          c.get("designation", "—"),
+            "company":              c.get("company", "—"),
+            "country":              c.get("country", "—"),
+            "email":                c.get("email", ""),
+            "iei_score":            c.get("iei_score", 0),
+            "iei_tier":             c.get("iei_tier", "T4"),
             "reg_prob":             c.get("reg_prob", 0.5),
             "cached_analysis":      c.get("meeting_match_analysis"),
             "cached_analysed_at":   c.get("meeting_match_analysed_at"),
-            "primary_reason":   c.get("primary_reason") or raw.get("primary_reason", ""),
-            "categories_interest": c.get("categories_interest") or raw.get("categories_interest", ""),
-            "meeting_interest": raw.get("wants_meeting") or c.get("meeting_interest"),
-            "purchase_timeline": raw.get("purchase_timeline", ""),
-            "actively_sourcing": raw.get("actively_sourcing", False),
-            "specific_product":  raw.get("specific_product_interest", ""),
-            "company_size":      c.get("company_size", ""),
-            "match_score":      score_data.get("matchScore", 50),
-            "meeting_prob":  score_data.get("meetingProb", 0.5),
-            "meeting_status": requested.get(c["id"]),
-            "meeting":        meeting_details.get(c["id"]),
+            "primary_reason":       c.get("primary_reason") or raw.get("primary_reason") or raw.get("Primary Reason", ""),
+            "categories_interest":  c.get("categories_interest") or raw.get("categories_interest") or raw.get("Categories of Interest", ""),
+            "meeting_interest":     raw.get("meeting_interest") or raw.get("Meeting Interest") or c.get("meeting_interest"),
+            "purchase_timeline":    raw.get("visit_timeline") or raw.get("Visit Timeline") or raw.get("purchase_timeline", ""),
+            "actively_sourcing":    raw.get("actively_sourcing", False),
+            "specific_product":     raw.get("specific_product_interest") or raw.get("Specific Product Interest", ""),
+            "company_size":         c.get("company_size") or raw.get("company_size") or raw.get("Company Size", ""),
+            "match_score":          match_score,
+            "meeting_prob":         meeting_prob,
+            "meeting_status":       requested.get(c["id"]),
+            "meeting":              meeting_details.get(c["id"]),
+            "category_match_score": float(raw.get("category_match_score") or c.get("category_match_score") or 0.0),
+            "match_reasoning":      raw.get("match_reasoning") or c.get("match_reasoning") or "",
         })
 
     # Sort by match score descending

@@ -305,3 +305,14 @@ def update_my_profile(
     if not result.data:
         raise HTTPException(status_code=404, detail="Profile not found")
     return result.data[0]
+
+
+# ── Client config endpoint ────────────────────────────────────────────────────
+@router.get("/client-config")
+def get_client_config():
+    """
+    Returns branding + feature config for this client instance.
+    No auth required — called at app startup by frontend.
+    """
+    from app.client_config import get_branding
+    return get_branding()
