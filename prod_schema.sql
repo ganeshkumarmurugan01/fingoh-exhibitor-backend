@@ -525,13 +525,24 @@ CREATE TABLE IF NOT EXISTS organiser_events (
 );
 
 -- Add FK from events and organisations to organiser_events
-ALTER TABLE events
-  ADD CONSTRAINT IF NOT EXISTS fk_events_organiser_event
-  FOREIGN KEY (organiser_event_id) REFERENCES organiser_events(id);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'fk_events_organiser_event'
+  ) THEN
+    ALTER TABLE events
+      ADD CONSTRAINT fk_events_organiser_event
+      FOREIGN KEY (organiser_event_id) REFERENCES organiser_events(id);
+  END IF;
 
-ALTER TABLE organisations
-  ADD CONSTRAINT IF NOT EXISTS fk_orgs_organiser_event
-  FOREIGN KEY (organiser_event_id) REFERENCES organiser_events(id);
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'fk_orgs_organiser_event'
+  ) THEN
+    ALTER TABLE organisations
+      ADD CONSTRAINT fk_orgs_organiser_event
+      FOREIGN KEY (organiser_event_id) REFERENCES organiser_events(id);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS organiser_exhibitor_links (
   id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),

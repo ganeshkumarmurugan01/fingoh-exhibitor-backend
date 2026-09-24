@@ -75,6 +75,19 @@ def _get_event_context(supabase, event_id: str) -> dict:
         logger.warning(f"[enrich] Failed to fetch exhibitor categories: {e}")
         context["exhibitor_categories"] = []
 
+    # Fetch product intelligence (full product knowledge from brochures)
+    try:
+        pi_res = supabase.table("product_intelligence") \
+            .select("name,type,short_description,full_description,features,benefits,applications,technical_specs,target_customers,keywords,category_master") \
+            .eq("event_id", event_id) \
+            .order("display_order") \
+            .limit(20) \
+            .execute()
+        context["product_intelligence"] = pi_res.data or []
+    except Exception as e:
+        logger.warning(f"[enrich] Failed to fetch product intelligence: {e}")
+        context["product_intelligence"] = []
+
     return context
 
 
@@ -249,6 +262,27 @@ async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncCli
     else:
         ex_category_block = ""
 
+    # Build product intelligence block from stored brochure extractions
+    product_intel = event_ctx.get("product_intelligence") or []
+    if product_intel:
+        pi_lines = ["Exhibitor Product Intelligence (extracted from brochures):"]
+        for p in product_intel[:10]:  # cap at 10 products for prompt size
+            pi_lines.append(f"  [{p.get('type','product').upper()}] {p.get('name','')}")
+            if p.get("short_description"):
+                pi_lines.append(f"    Description: {p['short_description']}")
+            if p.get("features"):
+                pi_lines.append(f"    Features: {', '.join(p['features'][:3])}")
+            if p.get("benefits"):
+                pi_lines.append(f"    Benefits: {', '.join(p['benefits'][:3])}")
+            if p.get("applications"):
+                pi_lines.append(f"    Applications: {', '.join(p['applications'][:3])}")
+            cats = p.get("category_master") or []
+            if cats:
+                pi_lines.append(f"    Categories: {', '.join(c['name'] for c in cats[:2])}")
+        product_intel_block = "\n".join(pi_lines)
+    else:
+        product_intel_block = ""
+
     # Get cached pharma intel headlines
     _sb_for_intel = get_db()
     industry_vertical_for_intel = event_ctx.get("industry_vertical") or "general"
@@ -290,6 +324,7 @@ EXHIBITOR CONTEXT:
 - Ideal buyer profile: {ex_buyers}
 - Exhibitor intent signals: {ex_signals}
 {f"{ex_category_block}" if ex_category_block else ""}
+{f"{product_intel_block}" if product_intel_block else ""}
 {f"{intel_block}" if intel_block else ""}
 
 VISITOR TO ANALYSE:
