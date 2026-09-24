@@ -249,3 +249,152 @@ async def upload_banner(payload: BannerUploadPayload, request: Request):
     sb.table("events").update({"banner_url": banner_url}).eq("id", payload.event_id).execute()
 
     return {"banner_url": banner_url}
+
+
+# ── Brochure PDF → Product catalog extraction ────────────────────────────────
+class BrochureExtractPayload(BaseModel):
+    event_id: str
+    file_base64: str
+    file_name: str
+
+@router.post("/products/extract-from-brochure")
+async def extract_from_brochure(payload: BrochureExtractPayload, request: Request):
+    """
+    Upload a product brochure PDF and extract structured product/service offerings
+    using Claude. Returns a list of extracted offerings with category suggestions
+    matched against the category_master table.
+    """
+    import anthropic, base64 as b64mod, os, json, re, logging
+    logger = logging.getLogger("fingoh.products")
+
+    user = await get_current_user(request)
+    sb = get_sb()
+
+    # Decode PDF
+    try:
+        pdf_content = b64mod.b64decode(payload.file_base64)
+    except Exception:
+        raise HTTPException(400, "Invalid base64 data.")
+
+    if len(pdf_content) > 20 * 1024 * 1024:
+        raise HTTPException(400, "Brochure too large. Max 20MB.")
+
+    # Fetch exhibitor event context
+    event_res = sb.table("events").select("*").eq("id", payload.event_id).maybe_single().execute()
+    if not event_res or not event_res.data:
+        raise HTTPException(404, "Event not found.")
+    event = event_res.data
+
+    # Fetch top-level category_master for context (L1 + L2 only to keep prompt lean)
+    cats_res = sb.table("category_master").select("id,name,level,description,parent_id") \
+        .eq("industry", "pharma").in_("level", [1, 2]).order("level").execute()
+    categories = cats_res.data or []
+
+    # Build category context string
+    cat_lines = []
+    l1_map = {c["id"]: c["name"] for c in categories if c["level"] == 1}
+    for c in categories:
+        if c["level"] == 1:
+            cat_lines.append(f"[L1] {c['name']}: {c.get('description','')[:80]}")
+        elif c["level"] == 2:
+            parent = l1_map.get(c["parent_id"], "")
+            cat_lines.append(f"  [L2] {c['name']} (under {parent}): {c.get('description','')[:80]}")
+    cat_context = "\n".join(cat_lines[:80])  # cap at 80 lines
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    client = anthropic.Anthropic(api_key=api_key)
+
+    prompt = f"""You are analysing a product/service brochure for {event.get('company_name', 'a pharma company')} exhibiting at {event.get('name', 'a trade fair')}.
+
+Extract ALL distinct products, services, and solutions mentioned in this brochure. For each one provide:
+1. A clear product/service name
+2. Type: one of [product, service, solution, spare]
+3. A detailed description (2-4 sentences capturing key features, benefits, technical specs, target use cases)
+4. Key specifications (up to 5 bullet points of specific technical details, capacities, standards)
+5. Target industries (who would buy this)
+6. Best matching pharma categories from this list:
+
+{cat_context}
+
+Return ONLY a valid JSON array with this exact structure:
+[
+  {{
+    "name": "Product name",
+    "type": "product",
+    "short_description": "Detailed 2-4 sentence description...",
+    "key_specifications": ["spec1", "spec2"],
+    "target_industries": ["Pharmaceutical", "Biotech"],
+    "suggested_categories": ["Category L1 name > Category L2 name"],
+    "confidence": 0.9
+  }}
+]
+
+Extract every distinct offering. Be thorough — a brochure may contain 5-20 products. Return only the JSON array, no other text."""
+
+    try:
+        message = client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=4000,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": payload.file_base64,
+                        },
+                        "title": payload.file_name,
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt
+                    }
+                ]
+            }]
+        )
+
+        raw = message.content[0].text.strip()
+
+        # Extract JSON from response
+        json_match = re.search(r'\[.*\]', raw, re.DOTALL)
+        if not json_match:
+            raise ValueError("No JSON array found in response")
+
+        extracted = json.loads(json_match.group())
+
+        # Match suggested_categories to actual category_master IDs
+        all_cats_res = sb.table("category_master").select("id,name,level,parent_id") \
+            .eq("industry", "pharma").execute()
+        all_cats = all_cats_res.data or []
+        cat_name_map = {c["name"].lower(): c for c in all_cats}
+
+        for item in extracted:
+            matched_cats = []
+            for suggested in item.get("suggested_categories", []):
+                parts = [p.strip() for p in suggested.split(">")]
+                for part in reversed(parts):  # prefer L2/L3 match
+                    match = cat_name_map.get(part.lower())
+                    if match:
+                        matched_cats.append({"id": match["id"], "name": match["name"], "level": match["level"]})
+                        break
+            item["category_master"] = matched_cats
+            item.pop("suggested_categories", None)
+
+        logger.info(f"[extract_brochure] Extracted {len(extracted)} offerings from {payload.file_name}")
+        return {
+            "extracted": extracted,
+            "count": len(extracted),
+            "file_name": payload.file_name
+        }
+
+    except json.JSONDecodeError as e:
+        logger.error(f"[extract_brochure] JSON parse error: {e}\nRaw: {raw[:500]}")
+        raise HTTPException(500, "Could not parse Claude response. Please try again.")
+    except anthropic.BadRequestError as e:
+        logger.error(f"[extract_brochure] Claude error: {e}")
+        raise HTTPException(422, "Could not read PDF. Please ensure it contains selectable text.")
+    except Exception as e:
+        logger.error(f"[extract_brochure] Unexpected error: {e}")
+        raise HTTPException(500, f"Extraction failed: {str(e)}")
