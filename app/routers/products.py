@@ -168,15 +168,15 @@ async def upload_logo(payload: LogoUploadPayload, request: Request):
 
     import base64 as b64mod
     try:
-        content = b64mod.b64decode(payload.file_base64)
+        content = b64mod.b64decode(file_base64)
     except Exception:
         raise HTTPException(400, "Invalid base64 data.")
 
     if len(content) > LOGO_MAX_BYTES:
         raise HTTPException(400, "Logo too large. Max 2MB.")
 
-    ext = payload.file_name.rsplit(".", 1)[-1].lower() if "." in payload.file_name else "png"
-    storage_path = f"{org_id}/{payload.event_id}/logo/logo.{ext}"
+    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else "png"
+    storage_path = f"{org_id}/{event_id}/logo/logo.{ext}"
 
     try:
         sb.storage.from_(BUCKET).remove([storage_path])
@@ -195,7 +195,7 @@ async def upload_logo(payload: LogoUploadPayload, request: Request):
     signed = sb.storage.from_(BUCKET).create_signed_url(storage_path, 315_360_000)
     logo_url = signed.get("signedURL") or signed.get("signedUrl", "")
 
-    sb.table("events").update({"logo_url": logo_url}).eq("id", payload.event_id).execute()
+    sb.table("events").update({"logo_url": logo_url}).eq("id", event_id).execute()
 
     return {"logo_url": logo_url}
 
@@ -219,15 +219,15 @@ async def upload_banner(payload: BannerUploadPayload, request: Request):
 
     import base64 as b64mod
     try:
-        content = b64mod.b64decode(payload.file_base64)
+        content = b64mod.b64decode(file_base64)
     except Exception:
         raise HTTPException(400, "Invalid base64 data.")
 
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(400, "Banner too large. Max 5MB.")
 
-    ext = payload.file_name.rsplit(".", 1)[-1].lower() if "." in payload.file_name else "jpg"
-    storage_path = f"{org_id}/{payload.event_id}/banner/banner.{ext}"
+    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else "jpg"
+    storage_path = f"{org_id}/{event_id}/banner/banner.{ext}"
 
     try:
         sb.storage.from_(BUCKET).remove([storage_path])
@@ -246,19 +246,18 @@ async def upload_banner(payload: BannerUploadPayload, request: Request):
     signed = sb.storage.from_(BUCKET).create_signed_url(storage_path, 315_360_000)
     banner_url = signed.get("signedURL") or signed.get("signedUrl", "")
 
-    sb.table("events").update({"banner_url": banner_url}).eq("id", payload.event_id).execute()
+    sb.table("events").update({"banner_url": banner_url}).eq("id", event_id).execute()
 
     return {"banner_url": banner_url}
 
 
 # ── Brochure PDF → Product catalog extraction ────────────────────────────────
-class BrochureExtractPayload(BaseModel):
-    event_id: str
-    file_base64: str
-    file_name: str
-
 @router.post("/products/extract-from-brochure")
-async def extract_from_brochure(payload: BrochureExtractPayload, request: Request):
+async def extract_from_brochure(
+    request: Request,
+    file: UploadFile = File(...),
+    event_id: str = Form(...),
+):
     """
     Upload a product brochure PDF and extract structured product/service offerings
     using Claude. Returns a list of extracted offerings with category suggestions
@@ -270,17 +269,18 @@ async def extract_from_brochure(payload: BrochureExtractPayload, request: Reques
     user = await get_current_user(request)
     sb = get_sb()
 
-    # Decode PDF
-    try:
-        pdf_content = b64mod.b64decode(payload.file_base64)
-    except Exception:
-        raise HTTPException(400, "Invalid base64 data.")
+    if file.content_type != "application/pdf":
+        raise HTTPException(400, "Only PDF files are supported.")
 
+    pdf_content = await file.read()
     if len(pdf_content) > 20 * 1024 * 1024:
         raise HTTPException(400, "Brochure too large. Max 20MB.")
 
+    file_name = file.filename or "brochure.pdf"
+    file_base64 = b64mod.b64encode(pdf_content).decode()
+
     # Fetch exhibitor event context
-    event_res = sb.table("events").select("*").eq("id", payload.event_id).maybe_single().execute()
+    event_res = sb.table("events").select("*").eq("id", event_id).maybe_single().execute()
     if not event_res or not event_res.data:
         raise HTTPException(404, "Event not found.")
     event = event_res.data
@@ -343,9 +343,9 @@ Extract every distinct offering. Be thorough — a brochure may contain 5-20 pro
                         "source": {
                             "type": "base64",
                             "media_type": "application/pdf",
-                            "data": payload.file_base64,
+                            "data": file_base64,
                         },
-                        "title": payload.file_name,
+                        "title": file_name,
                     },
                     {
                         "type": "text",
@@ -382,11 +382,11 @@ Extract every distinct offering. Be thorough — a brochure may contain 5-20 pro
             item["category_master"] = matched_cats
             item.pop("suggested_categories", None)
 
-        logger.info(f"[extract_brochure] Extracted {len(extracted)} offerings from {payload.file_name}")
+        logger.info(f"[extract_brochure] Extracted {len(extracted)} offerings from {file_name}")
         return {
             "extracted": extracted,
             "count": len(extracted),
-            "file_name": payload.file_name
+            "file_name": file_name
         }
 
     except json.JSONDecodeError as e:
