@@ -304,37 +304,34 @@ async def extract_from_brochure(
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     client = anthropic.Anthropic(api_key=api_key)
 
-    prompt = f"""You are analysing a product/service brochure for {event.get('company_name', 'a pharma company')} exhibiting at {event.get('name', 'a trade fair')}.
+    prompt = f"""Analyse this product brochure for {event.get('company_name', 'a pharma company')} at {event.get('name', 'a trade fair')}.
 
-Extract ALL distinct products, services, and solutions mentioned in this brochure. For each one provide:
-1. A clear product/service name
-2. Type: one of [product, service, solution, spare]
-3. A detailed description (2-4 sentences capturing key features, benefits, technical specs, target use cases)
-4. Key specifications (up to 5 bullet points of specific technical details, capacities, standards)
-5. Target industries (who would buy this)
-6. Best matching pharma categories from this list:
-
-{cat_context}
-
-Return ONLY a valid JSON array with this exact structure:
+Extract ALL distinct products/services. Return a JSON array only, no markdown, no explanation:
 [
   {{
-    "name": "Product name",
-    "type": "product",
-    "short_description": "Detailed 2-4 sentence description...",
-    "key_specifications": ["spec1", "spec2"],
+    "name": "exact product name (max 60 chars)",
+    "type": "product|service|solution|spare",
+    "short_description": "2-3 sentences on what it does, key benefits, use cases. Max 200 chars.",
+    "key_specifications": ["spec1 (max 80 chars)", "spec2", "spec3"],
     "target_industries": ["Pharmaceutical", "Biotech"],
-    "suggested_categories": ["Category L1 name > Category L2 name"],
-    "confidence": 0.9
+    "suggested_categories": ["L1 Category > L2 Category"]
   }}
 ]
 
-Extract every distinct offering. Be thorough — a brochure may contain 5-20 products. Return only the JSON array, no other text."""
+Match suggested_categories from this list only:
+{cat_context}
+
+Rules:
+- Keep ALL strings short — max 200 chars for descriptions, 80 chars for specs
+- Max 4 key_specifications per product
+- Max 2 suggested_categories per product  
+- Extract every distinct product/service, typically 5-20 items
+- Return ONLY the JSON array, starting with [ and ending with ]"""
 
     try:
         message = client.messages.create(
             model="claude-opus-4-5",
-            max_tokens=4000,
+            max_tokens=8000,
             messages=[{
                 "role": "user",
                 "content": [
