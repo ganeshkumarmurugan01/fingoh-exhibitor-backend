@@ -357,7 +357,12 @@ Extract every distinct offering. Be thorough — a brochure may contain 5-20 pro
 
         raw = message.content[0].text.strip()
 
-        # Extract JSON from response
+        # Strip markdown code fences if present
+        raw = re.sub(r'^```(?:json)?\s*', '', raw, flags=re.MULTILINE)
+        raw = re.sub(r'\s*```$', '', raw, flags=re.MULTILINE)
+        raw = raw.strip()
+
+        # Extract JSON array from response
         json_match = re.search(r'\[.*\]', raw, re.DOTALL)
         if not json_match:
             raise ValueError("No JSON array found in response")
