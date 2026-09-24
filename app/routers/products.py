@@ -318,40 +318,34 @@ async def extract_from_brochure(
 
     prompt = f"""Analyse this product brochure for {event.get('company_name', 'a pharma company')} at {event.get('name', 'a trade fair')}.
 
-Extract ALL distinct products, services and solutions. For each one extract complete intelligence.
-Return a JSON array only, no markdown, no explanation:
+Extract ALL distinct products/services. Return a JSON array only, no markdown, no preamble:
 [
   {{
-    "name": "exact product/service name",
+    "name": "product name (max 60 chars)",
     "type": "product|service|solution|spare",
-    "short_description": "1-2 sentence summary of what it is and does",
-    "full_description": "Complete detailed description including purpose, how it works, key technology",
-    "features": ["Feature 1", "Feature 2", "Feature 3"],
-    "benefits": ["Benefit/advantage 1", "Benefit 2"],
-    "applications": ["Use case / application 1", "Application 2"],
-    "technical_specs": {{"key": "value", "capacity": "range", "material": "type"}},
-    "target_customers": ["Pharmaceutical manufacturers", "Biotech"],
-    "certifications": ["cGMP", "FDA", "CE"],
-    "keywords": ["keyword1", "keyword2"],
-    "suggested_categories": ["L1 Category > L2 Category"]
+    "short_description": "max 120 chars summary",
+    "full_description": "max 250 chars detailed description",
+    "features": ["max 60 chars each", "max 5 items"],
+    "benefits": ["max 60 chars each", "max 4 items"],
+    "applications": ["max 60 chars each", "max 4 items"],
+    "technical_specs": {{"key": "value (max 3 pairs)"}},
+    "target_customers": ["max 3 items"],
+    "certifications": ["cGMP", "FDA"],
+    "keywords": ["max 5 keywords"],
+    "suggested_categories": ["L1 > L2 (max 2)"]
   }}
 ]
 
-Match suggested_categories from this list only:
+Match suggested_categories from:
 {cat_context}
 
-Rules:
-- Extract EVERY distinct product/service mentioned — typically 5-30 items
-- features: specific product features/capabilities (max 6)
-- benefits: business/operational advantages (max 4)
-- applications: specific use cases (max 5)
-- technical_specs: key-value pairs of measurable specs
-- Return ONLY the JSON array starting with [ and ending with ]"""
+CRITICAL: Keep ALL strings SHORT as specified. Extract every distinct product/service (5-30 items).
+Return ONLY the JSON array."""
 
     try:
         message = client.messages.create(
             model="claude-opus-4-5",
-            max_tokens=8000,
+            max_tokens=16000,
             messages=[{
                 "role": "user",
                 "content": [
