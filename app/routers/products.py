@@ -259,15 +259,17 @@ async def extract_from_brochure(
     event_id: str = Form(...),
 ):
     """
-    Upload a product brochure PDF and extract structured product/service offerings
-    using Claude. Returns a list of extracted offerings with category suggestions
-    matched against the category_master table.
+    Upload a product brochure PDF. Claude extracts ALL products with full intelligence
+    (features, benefits, applications, specs, certifications) and stores them in
+    product_intelligence table. No re-extraction needed — stored permanently.
+    Returns extracted products for UI preview/pinning.
     """
     import anthropic, base64 as b64mod, os, json, re, logging
     logger = logging.getLogger("fingoh.products")
 
     user = await get_current_user(request)
     sb = get_sb()
+    org_id = get_user_org(user["user_id"], sb)
 
     if file.content_type != "application/pdf":
         raise HTTPException(400, "Only PDF files are supported.")
@@ -278,6 +280,16 @@ async def extract_from_brochure(
 
     file_name = file.filename or "brochure.pdf"
     file_base64 = b64mod.b64encode(pdf_content).decode()
+
+    # Create brochure upload record
+    brochure_rec = sb.table("brochure_uploads").insert({
+        "event_id": event_id,
+        "org_id": org_id,
+        "file_name": file_name,
+        "file_size_bytes": len(pdf_content),
+        "extraction_status": "processing",
+    }).execute()
+    brochure_id = brochure_rec.data[0]["id"] if brochure_rec.data else None
 
     # Fetch exhibitor event context
     event_res = sb.table("events").select("*").eq("id", event_id).maybe_single().execute()
@@ -306,14 +318,21 @@ async def extract_from_brochure(
 
     prompt = f"""Analyse this product brochure for {event.get('company_name', 'a pharma company')} at {event.get('name', 'a trade fair')}.
 
-Extract ALL distinct products/services. Return a JSON array only, no markdown, no explanation:
+Extract ALL distinct products, services and solutions. For each one extract complete intelligence.
+Return a JSON array only, no markdown, no explanation:
 [
   {{
-    "name": "exact product name (max 60 chars)",
+    "name": "exact product/service name",
     "type": "product|service|solution|spare",
-    "short_description": "2-3 sentences on what it does, key benefits, use cases. Max 200 chars.",
-    "key_specifications": ["spec1 (max 80 chars)", "spec2", "spec3"],
-    "target_industries": ["Pharmaceutical", "Biotech"],
+    "short_description": "1-2 sentence summary of what it is and does",
+    "full_description": "Complete detailed description including purpose, how it works, key technology",
+    "features": ["Feature 1", "Feature 2", "Feature 3"],
+    "benefits": ["Benefit/advantage 1", "Benefit 2"],
+    "applications": ["Use case / application 1", "Application 2"],
+    "technical_specs": {{"key": "value", "capacity": "range", "material": "type"}},
+    "target_customers": ["Pharmaceutical manufacturers", "Biotech"],
+    "certifications": ["cGMP", "FDA", "CE"],
+    "keywords": ["keyword1", "keyword2"],
     "suggested_categories": ["L1 Category > L2 Category"]
   }}
 ]
@@ -322,11 +341,12 @@ Match suggested_categories from this list only:
 {cat_context}
 
 Rules:
-- Keep ALL strings short — max 200 chars for descriptions, 80 chars for specs
-- Max 4 key_specifications per product
-- Max 2 suggested_categories per product  
-- Extract every distinct product/service, typically 5-20 items
-- Return ONLY the JSON array, starting with [ and ending with ]"""
+- Extract EVERY distinct product/service mentioned — typically 5-30 items
+- features: specific product features/capabilities (max 6)
+- benefits: business/operational advantages (max 4)
+- applications: specific use cases (max 5)
+- technical_specs: key-value pairs of measurable specs
+- Return ONLY the JSON array starting with [ and ending with ]"""
 
     try:
         message = client.messages.create(
@@ -393,10 +413,68 @@ Rules:
 
     except json.JSONDecodeError as e:
         logger.error(f"[extract_brochure] JSON parse error: {e}\nRaw: {raw[:500]}")
+        if brochure_id:
+            sb.table("brochure_uploads").update({"extraction_status": "failed"}).eq("id", brochure_id).execute()
         raise HTTPException(500, "Could not parse Claude response. Please try again.")
     except anthropic.BadRequestError as e:
         logger.error(f"[extract_brochure] Claude error: {e}")
+        if brochure_id:
+            sb.table("brochure_uploads").update({"extraction_status": "failed"}).eq("id", brochure_id).execute()
         raise HTTPException(422, "Could not read PDF. Please ensure it contains selectable text.")
     except Exception as e:
         logger.error(f"[extract_brochure] Unexpected error: {e}")
+        if brochure_id:
+            sb.table("brochure_uploads").update({"extraction_status": "failed"}).eq("id", brochure_id).execute()
         raise HTTPException(500, f"Extraction failed: {str(e)}")
+
+
+# ── Product Intelligence — list + pin/unpin ───────────────────────────────────
+@router.get("/products/intelligence/{event_id}")
+async def get_product_intelligence(event_id: str, request: Request):
+    """Get all stored product intelligence for an event."""
+    user = await get_current_user(request)
+    sb = get_sb()
+    res = sb.table("product_intelligence") \
+        .select("*") \
+        .eq("event_id", event_id) \
+        .order("display_order") \
+        .execute()
+    return res.data or []
+
+
+@router.patch("/products/intelligence/{intelligence_id}/pin")
+async def pin_product_intelligence(intelligence_id: str, payload: dict, request: Request):
+    """Pin/unpin a product to show in visitor registration (max 5 pinned)."""
+    user = await get_current_user(request)
+    sb = get_sb()
+    is_pinned = payload.get("is_pinned", True)
+    event_id  = payload.get("event_id")
+
+    if is_pinned and event_id:
+        # Check pin count
+        pinned = sb.table("product_intelligence") \
+            .select("id", count="exact") \
+            .eq("event_id", event_id) \
+            .eq("is_pinned", True) \
+            .execute()
+        if (pinned.count or 0) >= 5:
+            raise HTTPException(400, "Maximum 5 products can be pinned for visitor registration")
+
+    res = sb.table("product_intelligence") \
+        .update({"is_pinned": is_pinned, "updated_at": "now()"}) \
+        .eq("id", intelligence_id) \
+        .execute()
+    return res.data[0] if res.data else {}
+
+
+@router.get("/products/brochures/{event_id}")
+async def get_brochure_uploads(event_id: str, request: Request):
+    """Get all brochure uploads for an event."""
+    user = await get_current_user(request)
+    sb = get_sb()
+    res = sb.table("brochure_uploads") \
+        .select("*") \
+        .eq("event_id", event_id) \
+        .order("created_at", desc=True) \
+        .execute()
+    return res.data or []
