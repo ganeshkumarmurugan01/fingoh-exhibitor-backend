@@ -386,11 +386,13 @@ Return ONLY the JSON array."""
         all_cats = all_cats_res.data or []
         cat_name_map = {c["name"].lower(): c for c in all_cats}
 
-        for item in extracted:
+        # Match categories + build rows for product_intelligence
+        rows_to_insert = []
+        for i, item in enumerate(extracted):
             matched_cats = []
             for suggested in item.get("suggested_categories", []):
                 parts = [p.strip() for p in suggested.split(">")]
-                for part in reversed(parts):  # prefer L2/L3 match
+                for part in reversed(parts):
                     match = cat_name_map.get(part.lower())
                     if match:
                         matched_cats.append({"id": match["id"], "name": match["name"], "level": match["level"]})
@@ -398,11 +400,49 @@ Return ONLY the JSON array."""
             item["category_master"] = matched_cats
             item.pop("suggested_categories", None)
 
-        logger.info(f"[extract_brochure] Extracted {len(extracted)} offerings from {file_name}")
+            rows_to_insert.append({
+                "brochure_id":       brochure_id,
+                "event_id":          event_id,
+                "org_id":            org_id,
+                "name":              item.get("name", ""),
+                "type":              item.get("type", "product"),
+                "short_description": item.get("short_description", ""),
+                "full_description":  item.get("full_description", ""),
+                "features":          item.get("features", []),
+                "benefits":          item.get("benefits", []),
+                "applications":      item.get("applications", []),
+                "technical_specs":   item.get("technical_specs", {}),
+                "target_customers":  item.get("target_customers", []),
+                "certifications":    item.get("certifications", []),
+                "keywords":          item.get("keywords", []),
+                "category_master":   matched_cats,
+                "confidence":        item.get("confidence", 0.8),
+                "display_order":     i,
+                "is_pinned":         False,
+            })
+
+        # Store all in product_intelligence
+        if rows_to_insert:
+            pi_res = sb.table("product_intelligence").insert(rows_to_insert).execute()
+            pi_data = pi_res.data or []
+            pi_id_map = {r["name"]: r["id"] for r in pi_data}
+            for item in extracted:
+                item["intelligence_id"] = pi_id_map.get(item.get("name"))
+
+        # Update brochure upload status
+        if brochure_id:
+            sb.table("brochure_uploads").update({
+                "extraction_status": "done",
+                "product_count":     len(extracted),
+                "token_count":       message.usage.input_tokens + message.usage.output_tokens,
+            }).eq("id", brochure_id).execute()
+
+        logger.info(f"[extract_brochure] Stored {len(extracted)} products in product_intelligence for event {event_id}")
         return {
-            "extracted": extracted,
-            "count": len(extracted),
-            "file_name": file_name
+            "extracted":   extracted,
+            "count":       len(extracted),
+            "file_name":   file_name,
+            "brochure_id": brochure_id,
         }
 
     except json.JSONDecodeError as e:
