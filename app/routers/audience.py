@@ -279,8 +279,7 @@ async def _enrich_visitor(visitor: dict, event_ctx: dict, client: httpx.AsyncCli
             cats = p.get("category_master") or []
             if cats:
                 pi_lines.append(f"    Categories: {', '.join(c['name'] for c in cats[:2])}")
-        product_intel_block = "
-".join(pi_lines)
+        product_intel_block = "\n".join(pi_lines)
     else:
         product_intel_block = ""
 
