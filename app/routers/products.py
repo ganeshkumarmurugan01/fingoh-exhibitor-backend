@@ -429,20 +429,48 @@ Return ONLY the JSON array."""
             for item in extracted:
                 item["intelligence_id"] = pi_id_map.get(item.get("name"))
 
-        # Update brochure upload status
+        # Generate document summary headline
+        product_names = [item.get("name","") for item in extracted[:5]]
+        names_preview = ", ".join(product_names)
+        if len(extracted) > 5:
+            names_preview += f" +{len(extracted)-5} more"
+
+        # Detect document type from content
+        doc_type = "product_catalog"
+        all_types = [item.get("type","") for item in extracted]
+        if all_types.count("service") > len(extracted) * 0.5:
+            doc_type = "service_catalog"
+        elif any(item.get("type") == "solution" for item in extracted):
+            doc_type = "solution_catalog"
+
+        # Key facts extracted
+        key_facts = list(set([
+            cat["name"]
+            for item in extracted
+            for cat in (item.get("category_master") or [])
+        ]))[:8]
+
+        document_summary = f"{len(extracted)} {'products' if doc_type=='product_catalog' else 'items'} extracted: {names_preview}"
+
+        # Update brochure upload status with summary
         if brochure_id:
             sb.table("brochure_uploads").update({
                 "extraction_status": "done",
                 "product_count":     len(extracted),
                 "token_count":       message.usage.input_tokens + message.usage.output_tokens,
+                "document_summary":  document_summary,
+                "document_type":     doc_type,
+                "key_facts":         key_facts,
             }).eq("id", brochure_id).execute()
 
         logger.info(f"[extract_brochure] Stored {len(extracted)} products in product_intelligence for event {event_id}")
         return {
-            "extracted":   extracted,
-            "count":       len(extracted),
-            "file_name":   file_name,
-            "brochure_id": brochure_id,
+            "extracted":        extracted,
+            "count":            len(extracted),
+            "file_name":        file_name,
+            "brochure_id":      brochure_id,
+            "document_summary": document_summary,
+            "key_facts":        key_facts,
         }
 
     except json.JSONDecodeError as e:
@@ -501,14 +529,25 @@ async def pin_product_intelligence(intelligence_id: str, payload: dict, request:
     return res.data[0] if res.data else {}
 
 
+
 @router.get("/products/brochures/{event_id}")
 async def get_brochure_uploads(event_id: str, request: Request):
-    """Get all brochure uploads for an event."""
+    """Get all brochure uploads for an event with summaries."""
     user = await get_current_user(request)
     sb = get_sb()
     res = sb.table("brochure_uploads") \
-        .select("*") \
+        .select("id,file_name,extraction_status,product_count,document_summary,document_type,key_facts,created_at,extracted_at") \
         .eq("event_id", event_id) \
         .order("created_at", desc=True) \
         .execute()
     return res.data or []
+
+
+@router.delete("/products/brochures/{brochure_id}")
+async def delete_brochure(brochure_id: str, request: Request):
+    """Delete a brochure and all its extracted product intelligence."""
+    user = await get_current_user(request)
+    sb = get_sb()
+    sb.table("product_intelligence").delete().eq("brochure_id", brochure_id).execute()
+    sb.table("brochure_uploads").delete().eq("id", brochure_id).execute()
+    return {"ok": True}
