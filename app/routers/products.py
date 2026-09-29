@@ -168,15 +168,15 @@ async def upload_logo(payload: LogoUploadPayload, request: Request):
 
     import base64 as b64mod
     try:
-        content = b64mod.b64decode(file_base64)
+        content = b64mod.b64decode(payload.file_base64)
     except Exception:
         raise HTTPException(400, "Invalid base64 data.")
 
     if len(content) > LOGO_MAX_BYTES:
         raise HTTPException(400, "Logo too large. Max 2MB.")
 
-    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else "png"
-    storage_path = f"{org_id}/{event_id}/logo/logo.{ext}"
+    ext = payload.file_name.rsplit(".", 1)[-1].lower() if "." in payload.file_name else "png"
+    storage_path = f"{org_id}/{payload.event_id}/logo/logo.{ext}"
 
     try:
         sb.storage.from_(BUCKET).remove([storage_path])
@@ -219,15 +219,15 @@ async def upload_banner(payload: BannerUploadPayload, request: Request):
 
     import base64 as b64mod
     try:
-        content = b64mod.b64decode(file_base64)
+        content = b64mod.b64decode(payload.file_base64)
     except Exception:
         raise HTTPException(400, "Invalid base64 data.")
 
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(400, "Banner too large. Max 5MB.")
 
-    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else "jpg"
-    storage_path = f"{org_id}/{event_id}/banner/banner.{ext}"
+    ext = payload.file_name.rsplit(".", 1)[-1].lower() if "." in payload.file_name else "jpg"
+    storage_path = f"{org_id}/{payload.event_id}/banner/banner.{ext}"
 
     try:
         sb.storage.from_(BUCKET).remove([storage_path])
