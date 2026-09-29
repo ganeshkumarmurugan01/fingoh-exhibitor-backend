@@ -1056,9 +1056,9 @@ async def rescore_one(event_id: str, email: str):
 def check_email_registered(event_id: str, email: str):
     """Check if email is already registered for this event — public endpoint."""
     db = get_db()
-    existing = db.table("audience_contacts").select("id, name, raw_data").eq(
-        "event_id", event_id
-    ).eq("email", email).maybe_single().execute()
+    existing = db.table("audience_contacts").select(
+        "id, name, company, designation, city, country, raw_data"
+    ).eq("event_id", event_id).eq("email", email).maybe_single().execute()
 
     if existing and existing.data:
         raw = existing.data.get("raw_data") or {}
@@ -1067,6 +1067,10 @@ def check_email_registered(event_id: str, email: str):
             "exists":             True,
             "already_registered": already_registered,
             "name":               existing.data.get("name"),
+            "company":            existing.data.get("company"),
+            "designation":        existing.data.get("designation"),
+            "city":               existing.data.get("city"),
+            "country":            existing.data.get("country"),
         }
     return {"exists": False, "already_registered": False, "name": None}
 
