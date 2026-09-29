@@ -969,6 +969,20 @@ async def register_visitor(event_id: str, payload: RegistrationPayload):
             "reg_prob":  new_reg,
         }).eq("id", contact_id).execute()
 
+    # Auto-create a meeting request if visitor requested one
+    if payload.wants_meeting == "yes" and contact_id:
+        existing_mtg = db.table("meeting_requests").select("id, status").eq(
+            "event_id", event_id
+        ).eq("contact_id", contact_id).execute()
+        active = [m for m in (existing_mtg.data or []) if m.get("status") in ("pending", "accepted")]
+        if not active:
+            db.table("meeting_requests").insert({
+                "event_id":   event_id,
+                "contact_id": contact_id,
+                "status":     "pending",
+                "notes":      f"Meeting requested via registration form. Preferred visit day: {payload.preferred_visit_day or 'not specified'}",
+            }).execute()
+
     return {
         "success":    True,
         "is_new":     is_new,
