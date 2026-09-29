@@ -195,7 +195,7 @@ async def upload_logo(payload: LogoUploadPayload, request: Request):
     signed = sb.storage.from_(BUCKET).create_signed_url(storage_path, 315_360_000)
     logo_url = signed.get("signedURL") or signed.get("signedUrl", "")
 
-    sb.table("events").update({"logo_url": logo_url}).eq("id", event_id).execute()
+    sb.table("events").update({"logo_url": logo_url}).eq("id", payload.event_id).execute()
 
     return {"logo_url": logo_url}
 
@@ -246,7 +246,7 @@ async def upload_banner(payload: BannerUploadPayload, request: Request):
     signed = sb.storage.from_(BUCKET).create_signed_url(storage_path, 315_360_000)
     banner_url = signed.get("signedURL") or signed.get("signedUrl", "")
 
-    sb.table("events").update({"banner_url": banner_url}).eq("id", event_id).execute()
+    sb.table("events").update({"banner_url": banner_url}).eq("id", payload.event_id).execute()
 
     return {"banner_url": banner_url}
 
