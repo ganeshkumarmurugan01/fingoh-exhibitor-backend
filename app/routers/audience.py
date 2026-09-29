@@ -2,7 +2,6 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from pydantic import BaseModel
 import csv, io, httpx, os, json, asyncio
-from datetime import datetime, timezone
 from app.database import get_db
 from app.auth import get_current_user, get_user_org
 from app.routers.utils import log_activity
@@ -1205,11 +1204,9 @@ async def upload_audience(
                 scored[i] = {**score, "ieiScore": new_iei, "historical": history}
                 logger.debug("Historical boost %s: %.1f → %.1f (+%.1f) signals=%s", email, old_iei, new_iei, history['boost'], history['signals'])
 
-    _now = datetime.now(timezone.utc).isoformat()
     records = [
         {
             "event_id":    event_id,
-            "org_id":      org_id,
             "name":        _get(r, "name") or f'{_get(r, "first_name") or ""} {_get(r, "last_name") or ""}'.strip() or None,
             "email":       _get(r, "email"),
             "company":     _get(r, "company"),
@@ -1220,7 +1217,7 @@ async def upload_audience(
             "raw_data":    r,
             "iei_score":   s["ieiScore"],
             "reg_prob":    s["regProb"],
-            "scored_at":   _now,
+            "scored_at":   "now()",
             "meeting_interest": _parse_meeting_interest(_get(r, "meeting_interest")),
             "enrichment_status": "pending",
         }
