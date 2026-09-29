@@ -1237,6 +1237,19 @@ async def upload_audience(
         if rec.get("email") in already_enriched:
             rec["enrichment_status"] = "done"  # keep as done, won't re-enrich
 
+
+    # Deduplicate by email — prevents ON CONFLICT error when CSV has duplicate emails
+    seen = {}
+    duplicate_emails = []
+    for rec in records:
+        key = (rec['event_id'], (rec.get('email') or '').lower().strip())
+        if key in seen:
+            duplicate_emails.append(rec.get('email'))
+        seen[key] = rec
+    records = list(seen.values())
+    if duplicate_emails:
+        import logging as _log; _log.getLogger('fingoh.audience').warning('Skipped %d duplicate emails: %s', len(duplicate_emails), duplicate_emails)
+
     supabase.table("audience_contacts").upsert(
         records, on_conflict="event_id,email"
     ).execute()
