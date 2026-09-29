@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File, Request
 from pydantic import BaseModel
 import csv, io, httpx, os, json, asyncio
 from app.database import get_db
@@ -1237,19 +1237,6 @@ async def upload_audience(
         if rec.get("email") in already_enriched:
             rec["enrichment_status"] = "done"  # keep as done, won't re-enrich
 
-
-    # Deduplicate by email — prevents ON CONFLICT error when CSV has duplicate emails
-    seen = {}
-    duplicate_emails = []
-    for rec in records:
-        key = (rec['event_id'], (rec.get('email') or '').lower().strip())
-        if key in seen:
-            duplicate_emails.append(rec.get('email'))
-        seen[key] = rec
-    records = list(seen.values())
-    if duplicate_emails:
-        import logging as _log; _log.getLogger('fingoh.audience').warning('Skipped %d duplicate emails: %s', len(duplicate_emails), duplicate_emails)
-
     supabase.table("audience_contacts").upsert(
         records, on_conflict="event_id,email"
     ).execute()
@@ -2098,6 +2085,38 @@ async def check_signal(contact_id: str):
 class ErasureRequest(BaseModel):
     email: str
     reason: str = "gdpr_erasure"
+
+
+@router.patch("/contacts/{event_id}/{contact_id}")
+async def update_contact(
+    event_id: str,
+    contact_id: str,
+    payload: dict = Body(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """Update editable fields on a contact and re-queue for enrichment."""
+    db = get_db()
+    org_id = get_user_org(current_user["user_id"], db)
+
+    # Verify contact belongs to this org's event
+    ev = db.table("events").select("org_id").eq("id", event_id).eq("org_id", org_id).maybe_single().execute()
+    if not ev or not ev.data:
+        raise HTTPException(status_code=403, detail="Not authorised")
+
+    # Only allow specific fields to be updated
+    allowed = {"email", "company", "designation", "city", "country"}
+    update_data = {k: v for k, v in payload.items() if k in allowed}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    # Reset enrichment so the contact gets re-enriched with updated info
+    update_data["enrichment_status"] = "pending"
+    update_data["iei_research"] = None
+
+    db.table("audience_contacts").update(update_data).eq("id", contact_id).eq("event_id", event_id).execute()
+
+    updated = db.table("audience_contacts").select("*").eq("id", contact_id).maybe_single().execute()
+    return {"ok": True, "contact": updated.data}
 
 
 @router.delete("/contacts/{event_id}/{contact_id}")
