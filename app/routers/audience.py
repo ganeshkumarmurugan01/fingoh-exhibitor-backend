@@ -528,7 +528,7 @@ def get_historical_boost(db, email: str, previous_event_id: str) -> dict:
         # Find contact in previous event by email
         prev_contact_res = db.table("audience_contacts").select(
             "id, name, onsite_iei_score, onsite_signals"
-        ).eq("event_id", previous_event_id).eq("email", email).maybe_single().execute()
+        ).eq("event_id", previous_event_id).eq("email", email.strip()).maybe_single().execute()
 
         if not prev_contact_res or not prev_contact_res.data:
             return {"boost": 0.0, "signals": [], "returning": False}
@@ -1031,7 +1031,7 @@ async def rescore_one(event_id: str, email: str):
     event_ctx = _get_event_context(db, event_id)
     c = db.table("audience_contacts").select(
         "id,designation,company_size,raw_data"
-    ).eq("event_id", event_id).eq("email", email).maybe_single().execute()
+    ).eq("event_id", event_id).eq("email", email.strip()).maybe_single().execute()
     if not c or not c.data:
         return {"error": "Contact not found"}
     contact = c.data
@@ -1072,7 +1072,7 @@ def check_email_registered(event_id: str, email: str):
     db = get_db()
     existing = db.table("audience_contacts").select(
         "id, name, company, designation, city, country, raw_data"
-    ).eq("event_id", event_id).eq("email", email).maybe_single().execute()
+    ).eq("event_id", event_id).eq("email", email.strip()).maybe_single().execute()
 
     if existing and existing.data:
         raw = existing.data.get("raw_data") or {}
