@@ -2238,7 +2238,7 @@ async def erase_contact(
 
 class ScanCardRequest(BaseModel):
     image_base64: str          # base64-encoded JPEG/PNG
-    event_id: str
+    event_id: str = ""
 
 class WalkInSaveRequest(BaseModel):
     event_id:    str
